@@ -3,6 +3,7 @@ import os
 import json
 import subprocess
 import re
+import locale
 import matplotlib
 matplotlib.use('Qt5Agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -19,27 +20,56 @@ from Bio import AlignIO, SeqIO, Phylo
 from Bio.Seq import Seq
 
 def resource_path(relative_path):
-    """ Получает абсолютный путь к ресурсу (нужно для корректной работы внутри .exe) """
+    """ Get the absolute path to a resource (required for correct operation within .exe) """
     try:
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
+# --- Multilingual support (i18n) ---
+def detect_language():
+    try:
+        lang, _ = locale.getdefaultlocale()
+        if lang and lang.startswith('ru'):
+            return 'ru'
+    except Exception:
+        pass
+    return 'en'
+
+def load_translations():
+    """ Load localization strings from external JSON file """
+    locales_path = resource_path('locales.json')
+    if not os.path.exists(locales_path):
+        print(f"Warning: {locales_path} not found. Fallback to empty dictionary.")
+        return {"en": {}, "ru": {}}
+    
+    try:
+        with open(locales_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading {locales_path}: {e}")
+        return {"en": {}, "ru": {}}
+
+LANG = detect_language()
+STRINGS = load_translations()
+
+def _t(key):
+    """ Returns the translated string by key """
+    return STRINGS.get(LANG, {}).get(key, key)
+
+
 CONFIG_FILE = 'phyml_config.json'
 
-# --- Класс диалогового окна для просмотра дерева ---
+# --- Dialog class for tree visualization ---
 class TreeViewerDialog(QDialog):
     def __init__(self, tree_path, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"Результат PhyML: {os.path.basename(tree_path)}")
+        self.setWindowTitle(_t("tree_result").format(os.path.basename(tree_path)))
         self.setWindowIcon(QIcon(resource_path('icon.png')))
-        # 1. Делаем стартовое окно больше
         self.resize(1200, 800) 
         
         layout = QVBoxLayout(self)
-        
-        # Создаем фигуру и холст matplotlib
         self.figure = Figure()
         self.canvas = FigureCanvas(self.figure)
         self.toolbar = NavigationToolbar(self.canvas, self)
@@ -49,49 +79,32 @@ class TreeViewerDialog(QDialog):
         
         self.ax = self.figure.add_subplot(111)
         
-        # Отрисовка дерева
         try:
             tree = Phylo.read(tree_path, "newick")
-            
-            # 2. Функция для красивого форматирования подписей
             def format_label(node):
                 if node.is_terminal():
-                    return node.name # Имена видов (на концах веток) оставляем как есть
+                    return node.name
                 else:
-                    # Внутренние узлы (поддержки ветвей) округляем до целых чисел
                     if node.name:
                         try:
-                            # Пытаемся превратить длинный float в аккуратный int
                             return str(round(float(node.name)))
                         except ValueError:
-                            # Если там текст, оставляем текст
                             return node.name
                     return ""
 
-            # 3. Уменьшаем глобальный размер шрифта для графика
             import matplotlib
             matplotlib.rcParams.update({'font.size': 9})
-
-            # Рисуем дерево, передавая нашу функцию форматирования
             Phylo.draw(tree, axes=self.ax, do_show=False, label_func=format_label)
-            
-            self.ax.set_title("Дерево Максимального Правдоподобия (ML Tree)", pad=15, fontsize=12)
-            
-            # Автоматически подгоняем рамки, чтобы длинные названия не вылезали за край
+            self.ax.set_title(_t("ml_tree"), pad=15, fontsize=12)
             self.figure.tight_layout() 
-            
             self.canvas.draw()
-            
-            # Сбрасываем размер шрифта обратно, чтобы не влиять на другие графики (если будут)
             matplotlib.rcParams.update({'font.size': 10})
-            
         except Exception as e:
-            self.ax.text(0.5, 0.5, f"Ошибка отрисовки дерева:\n{e}", 
+            self.ax.text(0.5, 0.5, _t("tree_error").format(e), 
                          ha="center", va="center", color="red", fontsize=12)
             self.canvas.draw()
 
-
-# --- Рабочий поток ---
+# --- Background Worker Thread ---
 class PipelineWorker(QThread):
     log_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, str)
@@ -102,7 +115,6 @@ class PipelineWorker(QThread):
         self.fasta_file = fasta_file
         self.active_process = None
         self._is_cancelled = False
-        
         self._success = False
         self._out_tree_path = ""
 
@@ -113,91 +125,85 @@ class PipelineWorker(QThread):
 
         try:
             current_fasta = self.fasta_file
-
-            # 1. Проверка выравнивания (MUSCLE)
-            self.log_signal.emit(f"[*] Инициализация анализа файла: {current_fasta}")
+            self.log_signal.emit(_t("init_analysis").format(current_fasta))
+            
+            # 1. Alignment check
             if not self.is_aligned(current_fasta):
-                self.log_signal.emit("[!] Длины последовательностей различаются. Запуск MUSCLE...")
+                self.log_signal.emit(_t("diff_len"))
                 muscle_exe = self.config.get("muscle_path", "")
                 
                 if not muscle_exe or not os.path.exists(muscle_exe):
-                    self.log_signal.emit("[ОШИБКА] Некорректный путь к MUSCLE. Выравнивание невозможно.")
+                    self.log_signal.emit(_t("err_muscle"))
                     return
 
                 aligned_fasta = current_fasta.rsplit('.', 1)[0] + '_aligned.fasta'
-                
                 if os.path.exists(aligned_fasta):
                     try:
                         os.remove(aligned_fasta)
-                        self.log_signal.emit("[-] Найден старый выровненный файл. Удаление для перезаписи...")
+                        self.log_signal.emit(_t("del_old"))
                     except Exception as e:
-                        self.log_signal.emit(f"[ОШИБКА] Не удалось удалить старый файл: {e}")
+                        self.log_signal.emit(_t("err_del").format(e))
                         return
                 
                 cmd_muscle = [muscle_exe, "-align", current_fasta, "-output", aligned_fasta]
-                
                 self.active_process = subprocess.Popen(cmd_muscle, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=creation_flags)
-                
                 for line in iter(self.active_process.stdout.readline, ''):
-                    if self._is_cancelled:
-                        break
+                    if self._is_cancelled: break
                 self.active_process.stdout.close()
                 self.active_process.wait()
                 
                 if self.active_process.returncode != 0 and not self._is_cancelled:
                     cmd_muscle_v3 = [muscle_exe, "-in", current_fasta, "-out", aligned_fasta]
-                    
                     self.active_process = subprocess.Popen(cmd_muscle_v3, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=creation_flags)
-                    
                     for line in iter(self.active_process.stdout.readline, ''):
-                        if self._is_cancelled:
-                            break
+                        if self._is_cancelled: break
                     self.active_process.stdout.close()
                     self.active_process.wait()
 
                 if self._is_cancelled:
-                    self.log_signal.emit("[-] Процесс выравнивания прерван пользователем.")
+                    self.log_signal.emit(_t("cancel_align"))
                     return
 
                 if self.active_process.returncode == 0 and os.path.exists(aligned_fasta):
-                    self.log_signal.emit(f"[+] Выравнивание успешно завершено: {aligned_fasta}")
+                    self.log_signal.emit(_t("align_success").format(aligned_fasta))
                     current_fasta = aligned_fasta
                 else:
-                    self.log_signal.emit("[ОШИБКА] Сбой в работе MUSCLE. Проверьте входной файл.")
+                    self.log_signal.emit(_t("err_muscle_fail"))
                     return
             else:
-                self.log_signal.emit("[+] Последовательности выровнены.")
+                self.log_signal.emit(_t("seq_aligned"))
 
-            # 2. Очистка SIGARETKA PREDICTED и Конвертация
-            self.log_signal.emit("[*] Очистка символов и конвертация (FASTA -> PHYLIP)...")
+            # 2. Conversion (FASTA -> PHYLIP)
+            self.log_signal.emit(_t("cleaning"))
             phylip_path = current_fasta.rsplit('.', 1)[0] + '.phy'
-            
             try:
                 alignment = AlignIO.read(current_fasta, "fasta")
                 for record in alignment:
-                    clean_seq = str(record.seq).replace('.', '-')
-                    record.seq = Seq(clean_seq)
+                    record.seq = Seq(str(record.seq).replace('.', '-'))
                     clean_id = re.sub(r'[.|:;(),\s]', '_', record.id)
                     record.id = clean_id
                     record.name = clean_id
                     record.description = "" 
-                
                 AlignIO.write(alignment, phylip_path, "phylip-relaxed")
-                self.log_signal.emit(f"[+] Конвертация завершена: {phylip_path}")
+                self.log_signal.emit(_t("conv_success").format(phylip_path))
             except Exception as e:
-                self.log_signal.emit(f"[ОШИБКА] Сбой при конвертации: {e}")
-                return
+                self.log_signal.emit(_t("err_conv").format(e)); return
 
-            if self._is_cancelled:
-                return
+            if self._is_cancelled: return
 
-            # 3. Запуск PhyML
+            # 3. Run PhyML (MPI support added here)
             phyml_exe = self.config.get("phyml_path", "")
             if not phyml_exe or not os.path.exists(phyml_exe):
-                self.log_signal.emit("[ОШИБКА] Некорректный путь к PhyML.")
-                return
+                self.log_signal.emit(_t("err_phyml")); return
 
-            cmd_phyml = [phyml_exe, '-i', phylip_path]
+            cmd_phyml = []
+            if self.config.get("use_mpi", False):
+                mpirun_exe = self.config.get("mpirun_path", "mpirun")
+                np = self.config.get("mpi_np", "2")
+                cmd_phyml.extend([mpirun_exe, "-np", np])
+            
+            cmd_phyml.append(phyml_exe)
+            cmd_phyml.extend(['-i', phylip_path])
             cmd_phyml.extend(['-d', self.config.get("datatype", "nt")])
             cmd_phyml.extend(['-m', self.config.get("model", "HKY85")])
             
@@ -207,66 +213,53 @@ class PipelineWorker(QThread):
             else:
                 cmd_phyml.extend(['-b', support_method])
             
-            if self.config.get("freq") != "default":
-                cmd_phyml.extend(['-f', self.config.get("freq")])
-            if self.config.get("tstv"):
-                cmd_phyml.extend(['-t', self.config.get("tstv")])
-            if self.config.get("pinv"):
-                cmd_phyml.extend(['-v', self.config.get("pinv")])
-            if self.config.get("classes"):
-                cmd_phyml.extend(['-c', self.config.get("classes")])
-            if self.config.get("gamma"):
-                cmd_phyml.extend(['-a', self.config.get("gamma")])
-            
+            if self.config.get("freq") != "default": cmd_phyml.extend(['-f', self.config.get("freq")])
+            if self.config.get("tstv"): cmd_phyml.extend(['-t', self.config.get("tstv")])
+            if self.config.get("pinv"): cmd_phyml.extend(['-v', self.config.get("pinv")])
+            if self.config.get("classes"): cmd_phyml.extend(['-c', self.config.get("classes")])
+            if self.config.get("gamma"): cmd_phyml.extend(['-a', self.config.get("gamma")])
             cmd_phyml.extend(['-s', self.config.get("search", "NNI")])
             cmd_phyml.extend(['-o', self.config.get("optimize", "tlr")])
-            if self.config.get("parsimony"):
-                cmd_phyml.append('-p')
+            if self.config.get("parsimony"): cmd_phyml.append('-p')
 
-            self.log_signal.emit(f"[*] Запуск PhyML: {' '.join(cmd_phyml)}")
-
+            self.log_signal.emit(_t("run_phyml").format(' '.join(cmd_phyml)))
             self.active_process = subprocess.Popen(cmd_phyml, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=creation_flags)
             
             for line in iter(self.active_process.stdout.readline, ''):
-                if line:
-                    self.log_signal.emit(line.strip())
-                if self._is_cancelled:
-                    break
+                if line: self.log_signal.emit(line.strip())
+                if self._is_cancelled: break
 
             self.active_process.stdout.close()
             self.active_process.wait()
 
             if self._is_cancelled:
-                self.log_signal.emit("\n[-] Анализ прерван пользователем.")
+                self.log_signal.emit(_t("cancel_analysis"))
             elif self.active_process.returncode != 0:
-                self.log_signal.emit(f"\n[КРИТИЧЕСКАЯ ОШИБКА] PhyML завершил работу с кодом {self.active_process.returncode}.")
+                self.log_signal.emit(_t("err_crit_phyml").format(self.active_process.returncode))
             else:
-                self.log_signal.emit("\n[+] ПАЙПЛАЙН УСПЕШНО ЗАВЕРШЕН.")
+                self.log_signal.emit(_t("success_pipe"))
                 self._success = True
                 self._out_tree_path = f"{phylip_path}_phyml_tree.txt"
 
         except Exception as e:
-            self.log_signal.emit(f"\n[КРИТИЧЕСКАЯ ОШИБКА]: {str(e)}")
+            self.log_signal.emit(_t("err_crit").format(str(e)))
         finally:
             self.finished_signal.emit(self._success, self._out_tree_path)
 
     def cancel(self):
         self._is_cancelled = True
         if self.active_process and self.active_process.poll() is None:
-            try:
-                self.active_process.terminate()
-            except Exception:
-                self.active_process.kill()
+            try: self.active_process.terminate()
+            except Exception: self.active_process.kill()
 
     def is_aligned(self, file_path):
         records = list(SeqIO.parse(file_path, "fasta"))
-        if not records:
-            raise ValueError("Входной файл пуст или имеет некорректный формат FASTA.")
+        if not records: raise ValueError(_t("err_empty"))
         first_len = len(records[0].seq)
         return all(len(rec.seq) == first_len for rec in records)
 
 
-# --- Главное окно приложения ---
+# --- Main Application Window ---
 class PhyMLApp(QWidget):
     def __init__(self):
         super().__init__()
@@ -280,135 +273,125 @@ class PhyMLApp(QWidget):
     def initUI(self):
         self.setWindowTitle('phymlGUI')
         self.setWindowIcon(QIcon(resource_path('icon.png')))
-        self.resize(800, 800)
+        self.resize(850, 850)
         
         main_layout = QVBoxLayout()
         main_layout.setSpacing(10)
 
-        # 1. Группа "Пути и файлы"
-        group_paths = QGroupBox("1. Исполняемые файлы и данные")
+        # 1. Group: Paths
+        group_paths = QGroupBox(_t("group_paths"))
         path_layout = QFormLayout()
         
         self.phyml_path_input = QLineEdit()
-        btn_phyml = QPushButton("Обзор...")
+        btn_phyml = QPushButton(_t("btn_browse"))
         btn_phyml.clicked.connect(lambda: self.browse_file(self.phyml_path_input))
-        hbox1 = QHBoxLayout(); hbox1.setContentsMargins(0,0,0,0); hbox1.addWidget(self.phyml_path_input); hbox1.addWidget(btn_phyml)
-        path_layout.addRow("Путь к PhyML (.exe):", hbox1)
+        hbox1 = QHBoxLayout(); hbox1.addWidget(self.phyml_path_input); hbox1.addWidget(btn_phyml)
+        path_layout.addRow(_t("path_phyml"), hbox1)
+
+        self.mpirun_path_input = QLineEdit()
+        btn_mpirun = QPushButton(_t("btn_browse"))
+        btn_mpirun.clicked.connect(lambda: self.browse_file(self.mpirun_path_input))
+        hbox_mpi_path = QHBoxLayout(); hbox_mpi_path.addWidget(self.mpirun_path_input); hbox_mpi_path.addWidget(btn_mpirun)
+        path_layout.addRow(_t("path_mpirun"), hbox_mpi_path)
 
         self.muscle_path_input = QLineEdit()
-        btn_muscle = QPushButton("Обзор...")
+        btn_muscle = QPushButton(_t("btn_browse"))
         btn_muscle.clicked.connect(lambda: self.browse_file(self.muscle_path_input))
-        hbox2 = QHBoxLayout(); hbox2.setContentsMargins(0,0,0,0); hbox2.addWidget(self.muscle_path_input); hbox2.addWidget(btn_muscle)
-        path_layout.addRow("Путь к MUSCLE (.exe):", hbox2)
+        hbox2 = QHBoxLayout(); hbox2.addWidget(self.muscle_path_input); hbox2.addWidget(btn_muscle)
+        path_layout.addRow(_t("path_muscle"), hbox2)
 
         self.fasta_path_input = QLineEdit()
-        btn_fasta = QPushButton("Выбрать FASTA")
+        btn_fasta = QPushButton(_t("btn_select_fasta"))
         btn_fasta.clicked.connect(self.browse_fasta)
-        hbox3 = QHBoxLayout(); hbox3.setContentsMargins(0,0,0,0); hbox3.addWidget(self.fasta_path_input); hbox3.addWidget(btn_fasta)
-        path_layout.addRow("Входной FASTA файл:", hbox3)
+        hbox3 = QHBoxLayout(); hbox3.addWidget(self.fasta_path_input); hbox3.addWidget(btn_fasta)
+        path_layout.addRow(_t("input_fasta"), hbox3)
 
         group_paths.setLayout(path_layout)
         main_layout.addWidget(group_paths)
 
-        # 2. Вкладки параметров
+        # 2. Parameter Tabs
         self.tabs = QTabWidget()
         self.tabs.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
 
+        # Tab: Basic Parameters (MPI settings added here)
         tab_basic = QWidget()
         form_basic = QFormLayout(tab_basic)
         
+        self.chk_use_mpi = QCheckBox(_t("lbl_use_mpi"))
+        self.le_mpi_np = QLineEdit("4")
+        self.le_mpi_np.setFixedWidth(50)
+        mpi_hbox = QHBoxLayout(); mpi_hbox.addWidget(self.chk_use_mpi); mpi_hbox.addWidget(QLabel(_t("lbl_mpi_np"))); mpi_hbox.addWidget(self.le_mpi_np); mpi_hbox.addStretch()
+        form_basic.addRow(_t("mode_mpi"), mpi_hbox)
+
         self.cb_datatype = QComboBox()
-        self.cb_datatype.addItem("Нуклеотиды (DNA)", "nt")
-        self.cb_datatype.addItem("Аминокислоты (AA)", "aa")
+        self.cb_datatype.addItem(_t("dt_nt"), "nt")
+        self.cb_datatype.addItem(_t("dt_aa"), "aa")
         self.cb_datatype.currentIndexChanged.connect(self.update_models)
-        form_basic.addRow("Тип данных (-d):", self.cb_datatype)
+        form_basic.addRow(_t("lbl_dt"), self.cb_datatype)
 
         self.cb_model = QComboBox()
-        form_basic.addRow("Модель замен (-m):", self.cb_model)
+        form_basic.addRow(_t("lbl_model"), self.cb_model)
 
         self.cb_support_method = QComboBox()
-        self.cb_support_method.addItem("Bootstrap (Непараметрический)", "bootstrap")
-        self.cb_support_method.addItem("aLRT statistics (-1)", "-1")
-        self.cb_support_method.addItem("aLRT Chi2-based (-2)", "-2")
-        self.cb_support_method.addItem("SH-like branch supports (-4)", "-4")
-        self.cb_support_method.addItem("Без оценки поддержки (0)", "0")
+        self.cb_support_method.addItem(_t("supp_boot"), "bootstrap")
+        self.cb_support_method.addItem(_t("supp_alrt1"), "-1"); self.cb_support_method.addItem(_t("supp_alrt2"), "-2")
+        self.cb_support_method.addItem(_t("supp_alrt4"), "-4"); self.cb_support_method.addItem(_t("supp_none"), "0")
         self.cb_support_method.currentIndexChanged.connect(self.toggle_bootstrap_input)
-        form_basic.addRow("Поддержка ветвей (-b):", self.cb_support_method)
+        form_basic.addRow(_t("lbl_supp"), self.cb_support_method)
 
         self.le_bootstrap_replicates = QLineEdit("100")
-        self.le_bootstrap_replicates.setPlaceholderText("Количество реплик")
-        form_basic.addRow("Количество Bootstrap реплик:", self.le_bootstrap_replicates)
-        self.tabs.addTab(tab_basic, "Параметры модели")
+        form_basic.addRow(_t("lbl_boot"), self.le_bootstrap_replicates)
+        self.tabs.addTab(tab_basic, _t("tab_model"))
 
+        # Tab: Evolutionary
         tab_model = QWidget()
         form_model = QFormLayout(tab_model)
         self.cb_freq = QComboBox()
-        self.cb_freq.addItem("По умолчанию", "default")
-        self.cb_freq.addItem("Эмпирические (e)", "e")
-        self.cb_freq.addItem("Максимум правдоподобия (m)", "m")
-        form_model.addRow("Оценка частот (-f):", self.cb_freq)
-        self.le_tstv = QLineEdit("e")
-        form_model.addRow("Ts/Tv ratio (-t):", self.le_tstv)
-        self.le_pinv = QLineEdit("0.0")
-        form_model.addRow("Доля неизменных сайтов (-v):", self.le_pinv)
-        self.le_classes = QLineEdit("4")
-        form_model.addRow("Категории скоростей (-c):", self.le_classes)
-        self.le_gamma = QLineEdit("e")
-        form_model.addRow("Параметр Гамма (-a):", self.le_gamma)
-        self.tabs.addTab(tab_model, "Настройки эволюции")
+        self.cb_freq.addItem(_t("freq_def"), "default"); self.cb_freq.addItem(_t("freq_emp"), "e"); self.cb_freq.addItem(_t("freq_ml"), "m")
+        form_model.addRow(_t("lbl_freq"), self.cb_freq)
+        self.le_tstv = QLineEdit("e"); form_model.addRow(_t("lbl_tstv"), self.le_tstv)
+        self.le_pinv = QLineEdit("0.0"); form_model.addRow(_t("lbl_pinv"), self.le_pinv)
+        self.le_classes = QLineEdit("4"); form_model.addRow(_t("lbl_classes"), self.le_classes)
+        self.le_gamma = QLineEdit("e"); form_model.addRow(_t("lbl_gamma"), self.le_gamma)
+        self.tabs.addTab(tab_model, _t("tab_evo"))
 
+        # Tab: Tree Search
         tab_tree = QWidget()
         form_tree = QFormLayout(tab_tree)
         self.cb_search = QComboBox()
-        self.cb_search.addItem("NNI (Локальный поиск)", "NNI")
-        self.cb_search.addItem("SPR (Глобальный поиск)", "SPR")
-        self.cb_search.addItem("BEST (Лучший NNI/SPR)", "BEST")
-        form_tree.addRow("Алгоритм поиска (-s):", self.cb_search)
+        self.cb_search.addItem(_t("search_nni"), "NNI"); self.cb_search.addItem(_t("search_spr"), "SPR"); self.cb_search.addItem(_t("search_best"), "BEST")
+        form_tree.addRow(_t("lbl_search"), self.cb_search)
         self.cb_optimize = QComboBox()
-        self.cb_optimize.addItem("Топология, длины, параметры (tlr)", "tlr")
-        self.cb_optimize.addItem("Топология и длины ветвей (tl)", "tl")
-        self.cb_optimize.addItem("Длины ветвей и параметры (lr)", "lr")
-        self.cb_optimize.addItem("Только длины ветвей (l)", "l")
-        self.cb_optimize.addItem("Только параметры (r)", "r")
-        self.cb_optimize.addItem("Без оптимизации (n)", "n")
-        form_tree.addRow("Степень оптимизации (-o):", self.cb_optimize)
-        self.chk_parsimony = QCheckBox("Стартовое дерево парсимонии (-p)")
-        form_tree.addRow("", self.chk_parsimony)
-        self.tabs.addTab(tab_tree, "Поиск дерева")
+        self.cb_optimize.addItem(_t("opt_tlr"), "tlr"); self.cb_optimize.addItem(_t("opt_tl"), "tl"); self.cb_optimize.addItem(_t("opt_lr"), "lr")
+        self.cb_optimize.addItem(_t("opt_l"), "l"); self.cb_optimize.addItem(_t("opt_r"), "r"); self.cb_optimize.addItem(_t("opt_n"), "n")
+        form_tree.addRow(_t("lbl_opt"), self.cb_optimize)
+        self.chk_parsimony = QCheckBox(_t("chk_pars")); form_tree.addRow("", self.chk_parsimony)
+        self.tabs.addTab(tab_tree, _t("tab_search"))
 
         main_layout.addWidget(self.tabs)
 
-        # 3. Кнопки управления и чекбокс просмотра
+        # 3. Controls
         control_layout = QHBoxLayout()
-        
-        self.btn_run = QPushButton("Запуск анализа")
-        self.btn_run.setCursor(Qt.PointingHandCursor)
+        self.btn_run = QPushButton(_t("btn_run"))
         self.btn_run.setStyleSheet("background-color: #2196F3; color: white; padding: 10px; font-weight: bold;")
         self.btn_run.clicked.connect(self.start_pipeline)
         
-        self.btn_cancel = QPushButton("Прервать анализ")
-        self.btn_cancel.setCursor(Qt.PointingHandCursor)
+        self.btn_cancel = QPushButton(_t("btn_cancel"))
         self.btn_cancel.setStyleSheet("background-color: #F44336; color: white; padding: 10px; font-weight: bold;")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self.cancel_pipeline)
 
-        # Новый чекбокс
-        self.chk_show_tree = QCheckBox("Показать дерево после завершения")
+        self.chk_show_tree = QCheckBox(_t("chk_show"))
         self.chk_show_tree.setChecked(True)
-        self.chk_show_tree.setCursor(Qt.PointingHandCursor)
 
-        control_layout.addWidget(self.btn_run)
-        control_layout.addWidget(self.btn_cancel)
-        control_layout.addWidget(self.chk_show_tree)
-        
+        control_layout.addWidget(self.btn_run); control_layout.addWidget(self.btn_cancel); control_layout.addWidget(self.chk_show_tree)
         main_layout.addLayout(control_layout)
 
-        # 4. Консоль логов
-        group_logs = QGroupBox("Журнал выполнения")
+        # 4. Logs
+        group_logs = QGroupBox(_t("group_log"))
         log_layout = QVBoxLayout()
         self.log_console = QTextEdit()
         self.log_console.setReadOnly(True)
-        self.log_console.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding) 
         log_layout.addWidget(self.log_console)
         group_logs.setLayout(log_layout)
         main_layout.addWidget(group_logs)
@@ -418,7 +401,6 @@ class PhyMLApp(QWidget):
 
     def closeEvent(self, event):
         if self.worker and self.worker.isRunning():
-            self.log_console.append("\n[Система] Остановка фоновых процессов перед закрытием...")
             self.worker.cancel()
             self.worker.wait()
         event.accept()
@@ -426,56 +408,47 @@ class PhyMLApp(QWidget):
     def toggle_bootstrap_input(self):
         is_bootstrap = self.cb_support_method.currentData() == "bootstrap"
         self.le_bootstrap_replicates.setEnabled(is_bootstrap)
-        if not self._is_loading:
-            self.auto_save()
+        if not self._is_loading: self.auto_save()
 
     def update_models(self):
         self.cb_model.clear()
         dt = self.cb_datatype.currentData()
-        if dt == "nt":
-            models = ["HKY85", "JC69", "K80", "F81", "F84", "TN93", "GTR", "custom"]
-        else:
-            models = ["LG", "WAG", "JTT", "MtREV", "Dayhoff", "DCMut", "RtREV", 
-                      "CPREV", "VT", "Blosum62", "MtMam", "MtArt", "HIVw", "HIVb", "custom"]
-        for m in models:
-            self.cb_model.addItem(m, m)
-        if not self._is_loading:
-            self.auto_save()
+        models = ["HKY85", "JC69", "K80", "F81", "F84", "TN93", "GTR", "custom"] if dt == "nt" else \
+                 ["LG", "WAG", "JTT", "MtREV", "Dayhoff", "DCMut", "RtREV", "CPREV", "VT", "Blosum62", "MtMam", "MtArt", "HIVw", "HIVb", "custom"]
+        for m in models: self.cb_model.addItem(m, m)
+        if not self._is_loading: self.auto_save()
 
     def browse_file(self, line_edit):
-        path, _ = QFileDialog.getOpenFileName(self, "Выбор исполняемого файла")
-        if path:
-            line_edit.setText(path)
+        path, _ = QFileDialog.getOpenFileName(self, _t("file_exe"))
+        if path: line_edit.setText(path)
 
     def browse_fasta(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Выбор входного файла", "", "FASTA Files (*.fasta *.fas *.fa)")
+        path, _ = QFileDialog.getOpenFileName(self, _t("file_fasta"), "", "FASTA Files (*.fasta *.fas *.fa)")
         if path:
             self.fasta_path_input.setText(path)
             self.fasta_file = path
 
     def bind_autosave(self, parent_widget):
         for child in parent_widget.children():
-            if isinstance(child, QLineEdit):
-                child.textChanged.connect(self.trigger_autosave)
-            elif isinstance(child, QComboBox):
-                child.currentIndexChanged.connect(self.trigger_autosave)
-            elif isinstance(child, QCheckBox):
-                child.toggled.connect(self.trigger_autosave)
-            else:
-                self.bind_autosave(child)
+            if isinstance(child, QLineEdit): child.textChanged.connect(self.trigger_autosave)
+            elif isinstance(child, QComboBox): child.currentIndexChanged.connect(self.trigger_autosave)
+            elif isinstance(child, QCheckBox): child.toggled.connect(self.trigger_autosave)
+            else: self.bind_autosave(child)
 
     def trigger_autosave(self, *args):
-        if not self._is_loading:
-            self.auto_save()
+        if not self._is_loading: self.auto_save()
 
     def get_current_config(self):
         return {
             "phyml_path": self.phyml_path_input.text(),
+            "mpirun_path": self.mpirun_path_input.text(),
             "muscle_path": self.muscle_path_input.text(),
             "datatype": self.cb_datatype.currentData(),
             "model": self.cb_model.currentData(),
             "support_method": self.cb_support_method.currentData(),
             "bootstrap_replicates": self.le_bootstrap_replicates.text(),
+            "use_mpi": self.chk_use_mpi.isChecked(),
+            "mpi_np": self.le_mpi_np.text(),
             "freq": self.cb_freq.currentData(),
             "tstv": self.le_tstv.text(),
             "pinv": self.le_pinv.text(),
@@ -492,8 +465,7 @@ class PhyMLApp(QWidget):
         try:
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
-        except Exception as e:
-            pass
+        except: pass
 
     def load_config(self):
         self.update_models()
@@ -501,10 +473,9 @@ class PhyMLApp(QWidget):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
-                
                 self.phyml_path_input.setText(config.get("phyml_path", ""))
+                self.mpirun_path_input.setText(config.get("mpirun_path", "mpirun"))
                 self.muscle_path_input.setText(config.get("muscle_path", ""))
-                
                 self.set_combo_by_data(self.cb_datatype, config.get("datatype", "nt"))
                 self.update_models()
                 self.set_combo_by_data(self.cb_model, config.get("model", "HKY85"))
@@ -512,35 +483,27 @@ class PhyMLApp(QWidget):
                 self.set_combo_by_data(self.cb_support_method, config.get("support_method", "bootstrap"))
                 self.set_combo_by_data(self.cb_search, config.get("search", "NNI"))
                 self.set_combo_by_data(self.cb_optimize, config.get("optimize", "tlr"))
-
                 self.le_bootstrap_replicates.setText(config.get("bootstrap_replicates", "100"))
+                self.chk_use_mpi.setChecked(config.get("use_mpi", False))
+                self.le_mpi_np.setText(config.get("mpi_np", "4"))
                 self.le_tstv.setText(config.get("tstv", "e"))
                 self.le_pinv.setText(config.get("pinv", "0.0"))
                 self.le_classes.setText(config.get("classes", "4"))
                 self.le_gamma.setText(config.get("gamma", "e"))
-                
                 self.chk_parsimony.setChecked(config.get("parsimony", False))
                 self.chk_show_tree.setChecked(config.get("show_tree", True))
-
                 self.toggle_bootstrap_input()
-                self.log_console.append("[Система] Параметры успешно загружены.\n")
-            except Exception as e:
-                self.log_console.append(f"[ОШИБКА] Сбой чтения конфига: {e}\n")
+                self.log_console.append(_t("sys_load"))
+            except Exception as e: self.log_console.append(_t("err_load").format(e))
 
     def set_combo_by_data(self, combo, data_val):
         idx = combo.findData(data_val)
-        if idx >= 0:
-            combo.setCurrentIndex(idx)
+        if idx >= 0: combo.setCurrentIndex(idx)
 
     def start_pipeline(self):
         if not self.fasta_file or not os.path.exists(self.fasta_file):
-            QMessageBox.warning(self, "Ошибка", "Укажите существующий FASTA файл.")
-            return
-
-        self.btn_run.setEnabled(False)
-        self.btn_cancel.setEnabled(True)
-        self.log_console.clear()
-        
+            QMessageBox.warning(self, _t("err_box_title"), _t("err_box_msg")); return
+        self.btn_run.setEnabled(False); self.btn_cancel.setEnabled(True); self.log_console.clear()
         config = self.get_current_config()
         self.worker = PipelineWorker(config, self.fasta_file)
         self.worker.log_signal.connect(lambda msg: self.log_console.append(msg))
@@ -551,17 +514,13 @@ class PhyMLApp(QWidget):
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
             self.btn_cancel.setEnabled(False)
-            self.log_console.append("\n[!] Отправка сигнала прерывания процессу...")
+            self.log_console.append(_t("sys_interrupt"))
 
     def pipeline_finished(self, success, tree_path):
-        self.btn_run.setEnabled(True)
-        self.btn_cancel.setEnabled(False)
-        
-        # Если анализ прошел успешно, галочка стоит и файл дерева реально существует
+        self.btn_run.setEnabled(True); self.btn_cancel.setEnabled(False)
         if success and self.chk_show_tree.isChecked() and os.path.exists(tree_path):
-            self.log_console.append("[*] Открытие средства просмотра дерева...")
-            viewer = TreeViewerDialog(tree_path, self)
-            viewer.exec_() # Открываем окно как модальное
+            self.log_console.append(_t("sys_open_tree"))
+            viewer = TreeViewerDialog(tree_path, self); viewer.exec_()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
