@@ -19,6 +19,7 @@
 
 ### ⚙️ Requirements
 * **Executables:** `phyml.exe` (or MPI version) and `muscle.exe`.
+* **Python packages:** Python 3.9+ with `PySide6`, `matplotlib` and `biopython` (`pip install -r requirements.txt`).
 * **MPI Environment:** For parallel mode, **Microsoft MPI** is required (install `msmpisetup.exe` from the official Microsoft GitHub).
 
 ---
@@ -38,6 +39,7 @@
 
 ### ⚙️ Требования
 * **Программные файлы:** `phyml.exe` (или MPI-версия) и `muscle.exe`.
+* **Python-зависимости:** Python 3.9+ с пакетами `PySide6`, `matplotlib` и `biopython` (`pip install -r requirements.txt`).
 * **Среда MPI:** Для работы в параллельном режиме требуется установленный **Microsoft MPI** (инсталлятор `msmpisetup.exe` можно найти на официальном GitHub Microsoft).
 
 ---
