@@ -283,11 +283,34 @@ class PipelineWorker(QThread):
                 return False, ""
             else:
                 self.log_signal.emit(_t("success_pipe"))
-                return True, f"{phylip_path}_phyml_tree.txt"
+                tree_path = f"{phylip_path}_phyml_tree.txt"
+                self._log_stats_summary(tree_path)
+                return True, tree_path
 
         except Exception as e:
             self.log_signal.emit(_t("err_crit").format(str(e)))
             return False, ""
+
+    def _log_stats_summary(self, tree_path):
+        """Emit a one-line summary parsed from the sibling *_phyml_stats.txt."""
+        stats_path = tree_path.replace('_phyml_tree.txt', '_phyml_stats.txt')
+        if not os.path.exists(stats_path):
+            return
+        try:
+            with open(stats_path, encoding='utf-8', errors='replace') as f:
+                content = f.read()
+        except OSError:
+            return
+        def grab(pattern):
+            m = re.search(pattern, content)
+            return m.group(1) if m else "n/a"
+        self.log_signal.emit(_t("stats_summary").format(
+            grab(r'Model of \w+ substitution:\s*(\S+)'),
+            grab(r'Number of taxa:\s*(\d+)'),
+            grab(r'Log-likelihood:\s*(-?[\d.]+)'),
+            grab(r'Gamma shape parameter:\s*(-?[\d.]+)'),
+            grab(r'transition/transversion ratio:\s*(-?[\d.]+)'),
+            grab(r'Time used:\s*(\S+)')))
 
     def cancel(self):
         self._is_cancelled = True

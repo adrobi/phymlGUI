@@ -93,7 +93,8 @@
         "batch_found": "[*] Batch mode: {} FASTA files queued.",
         "batch_empty": "No FASTA files (*.fasta, *.fas, *.fa) found in the selected folder.",
         "batch_file_header": "\n=== File {}/{}: {} ===",
-        "batch_summary": "\n[+] Batch finished: {}/{} files succeeded."
+        "batch_summary": "\n[+] Batch finished: {}/{} files succeeded.",
+        "stats_summary": "[+] Stats: model {} | taxa {} | lnL {} | gamma {} | Ts/Tv {} | time {}"
     },
     "ru": {
         "tree_result": "Результат PhyML: {}",
@@ -189,6 +190,7 @@
         "batch_found": "[*] Пакетный режим: в очереди {} FASTA файлов.",
         "batch_empty": "В выбранной папке нет FASTA файлов (*.fasta, *.fas, *.fa).",
         "batch_file_header": "\n=== Файл {}/{}: {} ===",
-        "batch_summary": "\n[+] Пакет завершён: успешно {}/{} файлов."
+        "batch_summary": "\n[+] Пакет завершён: успешно {}/{} файлов.",
+        "stats_summary": "[+] Статистика: модель {} | такс {} | lnL {} | гамма {} | Ts/Tv {} | время {}"
     }
 }
