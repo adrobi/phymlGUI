@@ -4,3 +4,6 @@ phyml-mpi.exe
 phymlgui.spec
 __pycache__/
 phyml_config.json
+phymlgui v1.1/
+tools/
+testrun/
