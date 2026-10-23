@@ -94,7 +94,9 @@
         "batch_empty": "No FASTA files (*.fasta, *.fas, *.fa) found in the selected folder.",
         "batch_file_header": "\n=== File {}/{}: {} ===",
         "batch_summary": "\n[+] Batch finished: {}/{} files succeeded.",
-        "stats_summary": "[+] Stats: model {} | taxa {} | lnL {} | gamma {} | Ts/Tv {} | time {}"
+        "stats_summary": "[+] Stats: model {} | taxa {} | lnL {} | gamma {} | Ts/Tv {} | time {}",
+        "summary_saved": "[+] Summary CSV saved: {}",
+        "err_summary_save": "[ERROR] Failed to save summary CSV: {}"
     },
     "ru": {
         "tree_result": "Результат PhyML: {}",
@@ -191,6 +193,8 @@
         "batch_empty": "В выбранной папке нет FASTA файлов (*.fasta, *.fas, *.fa).",
         "batch_file_header": "\n=== Файл {}/{}: {} ===",
         "batch_summary": "\n[+] Пакет завершён: успешно {}/{} файлов.",
-        "stats_summary": "[+] Статистика: модель {} | такс {} | lnL {} | гамма {} | Ts/Tv {} | время {}"
+        "stats_summary": "[+] Статистика: модель {} | такс {} | lnL {} | гамма {} | Ts/Tv {} | время {}",
+        "summary_saved": "[+] Сводка сохранена в CSV: {}",
+        "err_summary_save": "[ОШИБКА] Не удалось сохранить сводку CSV: {}"
     }
 }

@@ -11,7 +11,10 @@
 
 ### 🛠 Core Capabilities
 * **Integrated Pipeline:** Automatically detects unaligned sequences and runs **MUSCLE** before passing data to **PhyML**.
-* **Parallel Computing (MPI):** Supports execution via `mpirun`/`mpiexec` for multi-core processing.
+* **Parallel Computing (MPI):** Supports execution via `mpirun`/`mpiexec` for multi-core processing; MPI binaries are detected automatically and misconfigured bootstrap runs are blocked with an explanation.
+* **Batch Mode:** Process a whole folder of FASTA files in one run — per-file log sections, a final N/M summary and an automatic `phymlgui_summary.csv` report.
+* **Hardware Awareness:** Physical/logical core detection (the `np` field is pre-filled), plus a live CPU status bar showing both system load and the utilization of the analysis process tree.
+* **Run Statistics:** Model, taxa count, log-likelihood, gamma shape, Ts/Tv and run time are printed in the log after every analysis.
 * **Data Sanitization:** Automatically cleans sequence IDs and alignments from characters that cause PhyML to crash (dots, colons, brackets, spaces).
 * **Format Conversion:** Converts `FASTA` to `PHYLIP-relaxed` format, supporting long sequence names.
 * **Visualization:** Built-in viewer for Newick trees with support for branch labels and image export.
@@ -31,7 +34,10 @@
 
 ### 🛠 Основные возможности
 * **Интегрированный пайплайн:** Автоматическое определение невыровненных последовательностей и запуск **MUSCLE** перед началом работы **PhyML**.
-* **Параллельные вычисления (MPI):** Поддержка запуска через `mpirun`/`mpiexec` для распределения нагрузки на несколько ядер процессора.
+* **Параллельные вычисления (MPI):** Поддержка запуска через `mpirun`/`mpiexec`; MPI-бинарники определяются автоматически, а некорректная конфигурация бутстрепа блокируется с пояснением.
+* **Пакетный режим:** Обработка целой папки FASTA-файлов за один запуск — секции лога по каждому файлу, итоговая сводка N/M и автоматический отчёт `phymlgui_summary.csv`.
+* **Аппаратная осведомлённость:** Определение физических/логических ядер (поле `np` заполняется автоматически) и живая строка состояния с загрузкой CPU — как системы, так и дерева процессов анализа.
+* **Статистика прогона:** Модель, число таксонов, лог-правдоподобие, параметр гаммы, Ts/Tv и время выводятся в лог после каждого анализа.
 * **Санитарная очистка данных:** Автоматическая замена символов в ID и последовательностях, вызывающих ошибки в PhyML (точки, двоеточия, скобки, пробелы).
 * **Конвертация форматов:** Перевод из `FASTA` в `PHYLIP-relaxed` с поддержкой длинных названий последовательностей.
 * **Визуализация:** Встроенный просмотрщик деревьев в формате Newick с отображением поддержек ветвей и возможностью сохранения графики.
@@ -50,6 +56,7 @@
 * `*.phy` — Prepared PHYLIP format / Подготовленный формат PHYLIP.
 * `*_phyml_tree.txt` — Resulting ML Tree (Newick) / Итоговое дерево (Newick).
 * `*_phyml_stats.txt` — Analysis statistics / Статистика анализа.
+* `phymlgui_summary.csv` — Per-file run summary (batch-friendly) / Сводка результатов по файлам.
 
 ## Credits & Acknowledgments / Авторы и благодарности
 
