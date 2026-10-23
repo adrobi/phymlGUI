@@ -3,7 +3,14 @@ import os
 import json
 import subprocess
 import re
+import shutil
 import locale
+
+try:
+    import psutil  # optional: CPU monitoring and physical core detection
+except ImportError:
+    psutil = None
+
 import matplotlib
 matplotlib.use('QtAgg')
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -13,8 +20,9 @@ from matplotlib.figure import Figure
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QFormLayout, QComboBox, QLineEdit, QPushButton,
                              QTextEdit, QFileDialog, QMessageBox, QTabWidget,
-                             QCheckBox, QGroupBox, QSizePolicy, QLabel, QDialog)
-from PySide6.QtCore import QThread, Signal, Qt
+                             QCheckBox, QGroupBox, QSizePolicy, QLabel, QDialog,
+                             QStatusBar, QProgressBar)
+from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QIcon
 from Bio import AlignIO, SeqIO, Phylo
 from Bio.Seq import Seq
@@ -60,6 +68,20 @@ def _t(key):
 
 
 CONFIG_FILE = 'phyml_config.json'
+
+def detect_cores():
+    """Physical and logical CPU counts (psutil preferred, os fallback)."""
+    phys = logi = None
+    if psutil is not None:
+        phys = psutil.cpu_count(logical=False)
+        logi = psutil.cpu_count(logical=True)
+    phys = phys or os.cpu_count() or 2
+    logi = logi or os.cpu_count() or phys
+    return phys, logi
+
+def is_mpi_binary(path):
+    """Heuristic: PhyML MPI builds are named phyml-mpi / phyml_mpi etc."""
+    return 'mpi' in os.path.basename(path or '').lower()
 
 # --- Dialog class for tree visualization ---
 class TreeViewerDialog(QDialog):
@@ -266,6 +288,10 @@ class PhyMLApp(QWidget):
         self._is_loading = True
         self.worker = None
         self.fasta_file = ""
+        self._mpi_auto_path = ""
+        self._cpu_samples = []
+        self._mon_procs = {}
+        self.phys_cores, self.logi_cores = detect_cores()
         self.initUI()
         self.load_config()
         self._is_loading = False
@@ -283,6 +309,7 @@ class PhyMLApp(QWidget):
         path_layout = QFormLayout()
         
         self.phyml_path_input = QLineEdit()
+        self.phyml_path_input.textChanged.connect(self.on_phyml_path_changed)
         btn_phyml = QPushButton(_t("btn_browse"))
         btn_phyml.clicked.connect(lambda: self.browse_file(self.phyml_path_input))
         hbox1 = QHBoxLayout(); hbox1.addWidget(self.phyml_path_input); hbox1.addWidget(btn_phyml)
@@ -318,7 +345,7 @@ class PhyMLApp(QWidget):
         form_basic = QFormLayout(tab_basic)
         
         self.chk_use_mpi = QCheckBox(_t("lbl_use_mpi"))
-        self.le_mpi_np = QLineEdit("4")
+        self.le_mpi_np = QLineEdit(str(self.phys_cores))
         self.le_mpi_np.setFixedWidth(50)
         mpi_hbox = QHBoxLayout(); mpi_hbox.addWidget(self.chk_use_mpi); mpi_hbox.addWidget(QLabel(_t("lbl_mpi_np"))); mpi_hbox.addWidget(self.le_mpi_np); mpi_hbox.addStretch()
         form_basic.addRow(_t("mode_mpi"), mpi_hbox)
@@ -395,6 +422,26 @@ class PhyMLApp(QWidget):
         log_layout.addWidget(self.log_console)
         group_logs.setLayout(log_layout)
         main_layout.addWidget(group_logs)
+
+        # 5. Status bar: core info + live CPU utilization
+        self.status_bar = QStatusBar()
+        self.status_bar.setSizeGripEnabled(False)
+        self.cores_label = QLabel(_t("cores_info").format(self.phys_cores, self.logi_cores))
+        self.cpu_sys_bar = QProgressBar()
+        self.cpu_sys_bar.setRange(0, 100)
+        self.cpu_sys_bar.setFixedWidth(120)
+        self.cpu_sys_bar.setTextVisible(False)
+        self.cpu_sys_label = QLabel(_t("cpu_sys").format(0))
+        self.cpu_run_label = QLabel(_t("cpu_analysis_idle"))
+        for w in (self.cores_label, self.cpu_sys_bar, self.cpu_sys_label, self.cpu_run_label):
+            self.status_bar.addPermanentWidget(w)
+        main_layout.addWidget(self.status_bar)
+
+        self.cpu_timer = QTimer(self)
+        self.cpu_timer.setInterval(1000)
+        self.cpu_timer.timeout.connect(self.update_cpu_status)
+        if psutil is not None:
+            self.cpu_timer.start()
 
         self.setLayout(main_layout)
         self.bind_autosave(self)
@@ -474,7 +521,10 @@ class PhyMLApp(QWidget):
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                 self.phyml_path_input.setText(config.get("phyml_path", ""))
-                self.mpirun_path_input.setText(config.get("mpirun_path", "mpirun"))
+                mpirun = config.get("mpirun_path", "mpiexec")
+                if mpirun in ("mpirun", "mpiexec"):
+                    mpirun = shutil.which("mpiexec") or shutil.which("mpirun") or mpirun
+                self.mpirun_path_input.setText(mpirun)
                 self.muscle_path_input.setText(config.get("muscle_path", ""))
                 self.set_combo_by_data(self.cb_datatype, config.get("datatype", "nt"))
                 self.update_models()
@@ -503,7 +553,13 @@ class PhyMLApp(QWidget):
     def start_pipeline(self):
         if not self.fasta_file or not os.path.exists(self.fasta_file):
             QMessageBox.warning(self, _t("err_box_title"), _t("err_box_msg")); return
+        if (is_mpi_binary(self.phyml_path_input.text())
+                and not self.chk_use_mpi.isChecked()
+                and self.cb_support_method.currentData() == "bootstrap"):
+            QMessageBox.warning(self, _t("mpi_boot_title"), _t("mpi_boot_msg")); return
         self.btn_run.setEnabled(False); self.btn_cancel.setEnabled(True); self.log_console.clear()
+        self._cpu_samples = []
+        self._mon_procs = {}
         config = self.get_current_config()
         self.worker = PipelineWorker(config, self.fasta_file)
         self.worker.log_signal.connect(lambda msg: self.log_console.append(msg))
@@ -518,9 +574,55 @@ class PhyMLApp(QWidget):
 
     def pipeline_finished(self, success, tree_path):
         self.btn_run.setEnabled(True); self.btn_cancel.setEnabled(False)
+        avg = sum(self._cpu_samples) / len(self._cpu_samples) if self._cpu_samples else 0.0
+        self.cpu_run_label.setText(_t("cpu_analysis_done").format(int(avg), round(avg / 100, 1)))
         if success and self.chk_show_tree.isChecked() and os.path.exists(tree_path):
             self.log_console.append(_t("sys_open_tree"))
             viewer = TreeViewerDialog(tree_path, self); viewer.exec()
+
+    def on_phyml_path_changed(self, path):
+        if is_mpi_binary(path):
+            if not self.chk_use_mpi.isChecked() and self._mpi_auto_path != path:
+                self._mpi_auto_path = path
+                self.chk_use_mpi.setChecked(True)
+                if not self._is_loading:
+                    self.log_console.append(_t("mpi_detected"))
+        else:
+            self._mpi_auto_path = ""
+
+    def update_cpu_status(self):
+        if psutil is None:
+            return
+        sys_pct = psutil.cpu_percent(interval=None)
+        self.cpu_sys_bar.setValue(int(sys_pct))
+        self.cpu_sys_label.setText(_t("cpu_sys").format(int(sys_pct)))
+        proc = self.worker.active_process if self.worker is not None else None
+        if (self.worker is not None and self.worker.isRunning()
+                and proc is not None and proc.poll() is None):
+            try:
+                root = psutil.Process(proc.pid)
+                pids = {proc.pid} | {c.pid for c in root.children(recursive=True)}
+            except psutil.Error:
+                return
+            # cpu_percent() keeps per-call state inside each Process object,
+            # so objects must be reused across ticks to get non-zero values
+            for k in list(self._mon_procs):
+                if k not in pids:
+                    del self._mon_procs[k]
+            total = 0.0
+            for p in pids:
+                obj = self._mon_procs.get(p)
+                if obj is None:
+                    try:
+                        obj = self._mon_procs[p] = psutil.Process(p)
+                    except psutil.Error:
+                        continue
+                try:
+                    total += obj.cpu_percent(interval=None)
+                except psutil.Error:
+                    pass
+            self._cpu_samples.append(total)
+            self.cpu_run_label.setText(_t("cpu_analysis").format(int(total), round(total / 100, 1)))
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
