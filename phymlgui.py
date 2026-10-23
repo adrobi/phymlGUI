@@ -520,7 +520,7 @@ class PhyMLApp(QWidget):
         self.btn_run.setEnabled(True); self.btn_cancel.setEnabled(False)
         if success and self.chk_show_tree.isChecked() and os.path.exists(tree_path):
             self.log_console.append(_t("sys_open_tree"))
-            viewer = TreeViewerDialog(tree_path, self); viewer.exec_()
+            viewer = TreeViewerDialog(tree_path, self); viewer.exec()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
