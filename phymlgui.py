@@ -5,17 +5,17 @@ import subprocess
 import re
 import locale
 import matplotlib
-matplotlib.use('Qt5Agg')
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+matplotlib.use('QtAgg')
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
-from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QFormLayout, QComboBox, QLineEdit, QPushButton, 
-                             QTextEdit, QFileDialog, QMessageBox, QTabWidget, 
+from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
+                             QFormLayout, QComboBox, QLineEdit, QPushButton,
+                             QTextEdit, QFileDialog, QMessageBox, QTabWidget,
                              QCheckBox, QGroupBox, QSizePolicy, QLabel, QDialog)
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
-from PyQt5.QtGui import QIcon
+from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtGui import QIcon
 from Bio import AlignIO, SeqIO, Phylo
 from Bio.Seq import Seq
 
@@ -106,8 +106,8 @@ class TreeViewerDialog(QDialog):
 
 # --- Background Worker Thread ---
 class PipelineWorker(QThread):
-    log_signal = pyqtSignal(str)
-    finished_signal = pyqtSignal(bool, str)
+    log_signal = Signal(str)
+    finished_signal = Signal(bool, str)
 
     def __init__(self, config, fasta_file):
         super().__init__()
@@ -526,4 +526,4 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = PhyMLApp()
     window.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
