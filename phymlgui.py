@@ -131,32 +131,53 @@ class PipelineWorker(QThread):
     log_signal = Signal(str)
     finished_signal = Signal(bool, str)
 
-    def __init__(self, config, fasta_file):
+    def __init__(self, config, fasta_files):
         super().__init__()
         self.config = config
-        self.fasta_file = fasta_file
+        if isinstance(fasta_files, str):
+            fasta_files = [fasta_files]
+        self.fasta_files = list(fasta_files)
         self.active_process = None
         self._is_cancelled = False
-        self._success = False
-        self._out_tree_path = ""
 
     def run(self):
+        n_ok, last_tree = 0, ""
+        batch = len(self.fasta_files) > 1
+        if batch:
+            self.log_signal.emit(_t("batch_found").format(len(self.fasta_files)))
+        for i, fasta in enumerate(self.fasta_files, 1):
+            if self._is_cancelled:
+                break
+            if batch:
+                self.log_signal.emit(_t("batch_file_header").format(i, len(self.fasta_files), os.path.basename(fasta)))
+            ok, tree = self._process_one(fasta)
+            if ok:
+                n_ok += 1
+                last_tree = tree
+            if self._is_cancelled:
+                break
+        if batch and not self._is_cancelled:
+            self.log_signal.emit(_t("batch_summary").format(n_ok, len(self.fasta_files)))
+        success = n_ok == len(self.fasta_files) and n_ok > 0 and not self._is_cancelled
+        self.finished_signal.emit(success, last_tree)
+
+    def _process_one(self, current_fasta):
+        """Full pipeline for a single FASTA file: returns (success, tree_path)."""
         creation_flags = 0
         if os.name == 'nt':
             creation_flags = subprocess.CREATE_NO_WINDOW
 
         try:
-            current_fasta = self.fasta_file
             self.log_signal.emit(_t("init_analysis").format(current_fasta))
-            
+
             # 1. Alignment check
             if not self.is_aligned(current_fasta):
                 self.log_signal.emit(_t("diff_len"))
                 muscle_exe = self.config.get("muscle_path", "")
-                
+
                 if not muscle_exe or not os.path.exists(muscle_exe):
                     self.log_signal.emit(_t("err_muscle"))
-                    return
+                    return False, ""
 
                 aligned_fasta = current_fasta.rsplit('.', 1)[0] + '_aligned.fasta'
                 if os.path.exists(aligned_fasta):
@@ -165,15 +186,15 @@ class PipelineWorker(QThread):
                         self.log_signal.emit(_t("del_old"))
                     except Exception as e:
                         self.log_signal.emit(_t("err_del").format(e))
-                        return
-                
+                        return False, ""
+
                 cmd_muscle = [muscle_exe, "-align", current_fasta, "-output", aligned_fasta]
                 self.active_process = subprocess.Popen(cmd_muscle, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=creation_flags)
                 for line in iter(self.active_process.stdout.readline, ''):
                     if self._is_cancelled: break
                 self.active_process.stdout.close()
                 self.active_process.wait()
-                
+
                 if self.active_process.returncode != 0 and not self._is_cancelled:
                     cmd_muscle_v3 = [muscle_exe, "-in", current_fasta, "-out", aligned_fasta]
                     self.active_process = subprocess.Popen(cmd_muscle_v3, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=creation_flags)
@@ -184,14 +205,14 @@ class PipelineWorker(QThread):
 
                 if self._is_cancelled:
                     self.log_signal.emit(_t("cancel_align"))
-                    return
+                    return False, ""
 
                 if self.active_process.returncode == 0 and os.path.exists(aligned_fasta):
                     self.log_signal.emit(_t("align_success").format(aligned_fasta))
                     current_fasta = aligned_fasta
                 else:
                     self.log_signal.emit(_t("err_muscle_fail"))
-                    return
+                    return False, ""
             else:
                 self.log_signal.emit(_t("seq_aligned"))
 
@@ -205,36 +226,36 @@ class PipelineWorker(QThread):
                     clean_id = re.sub(r'[.|:;(),\s]', '_', record.id)
                     record.id = clean_id
                     record.name = clean_id
-                    record.description = "" 
+                    record.description = ""
                 AlignIO.write(alignment, phylip_path, "phylip-relaxed")
                 self.log_signal.emit(_t("conv_success").format(phylip_path))
             except Exception as e:
-                self.log_signal.emit(_t("err_conv").format(e)); return
+                self.log_signal.emit(_t("err_conv").format(e)); return False, ""
 
-            if self._is_cancelled: return
+            if self._is_cancelled: return False, ""
 
             # 3. Run PhyML (MPI support added here)
             phyml_exe = self.config.get("phyml_path", "")
             if not phyml_exe or not os.path.exists(phyml_exe):
-                self.log_signal.emit(_t("err_phyml")); return
+                self.log_signal.emit(_t("err_phyml")); return False, ""
 
             cmd_phyml = []
             if self.config.get("use_mpi", False):
-                mpirun_exe = self.config.get("mpirun_path", "mpirun")
+                mpirun_exe = self.config.get("mpirun_path", "mpiexec")
                 np = self.config.get("mpi_np", "2")
                 cmd_phyml.extend([mpirun_exe, "-np", np])
-            
+
             cmd_phyml.append(phyml_exe)
             cmd_phyml.extend(['-i', phylip_path])
             cmd_phyml.extend(['-d', self.config.get("datatype", "nt")])
             cmd_phyml.extend(['-m', self.config.get("model", "HKY85")])
-            
+
             support_method = self.config.get("support_method", "bootstrap")
             if support_method == "bootstrap":
                 cmd_phyml.extend(['-b', self.config.get("bootstrap_replicates", "100")])
             else:
                 cmd_phyml.extend(['-b', support_method])
-            
+
             if self.config.get("freq") != "default": cmd_phyml.extend(['-f', self.config.get("freq")])
             if self.config.get("tstv"): cmd_phyml.extend(['-t', self.config.get("tstv")])
             if self.config.get("pinv"): cmd_phyml.extend(['-v', self.config.get("pinv")])
@@ -246,7 +267,7 @@ class PipelineWorker(QThread):
 
             self.log_signal.emit(_t("run_phyml").format(' '.join(cmd_phyml)))
             self.active_process = subprocess.Popen(cmd_phyml, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=creation_flags)
-            
+
             for line in iter(self.active_process.stdout.readline, ''):
                 if line: self.log_signal.emit(line.strip())
                 if self._is_cancelled: break
@@ -256,17 +277,17 @@ class PipelineWorker(QThread):
 
             if self._is_cancelled:
                 self.log_signal.emit(_t("cancel_analysis"))
+                return False, ""
             elif self.active_process.returncode != 0:
                 self.log_signal.emit(_t("err_crit_phyml").format(self.active_process.returncode))
+                return False, ""
             else:
                 self.log_signal.emit(_t("success_pipe"))
-                self._success = True
-                self._out_tree_path = f"{phylip_path}_phyml_tree.txt"
+                return True, f"{phylip_path}_phyml_tree.txt"
 
         except Exception as e:
             self.log_signal.emit(_t("err_crit").format(str(e)))
-        finally:
-            self.finished_signal.emit(self._success, self._out_tree_path)
+            return False, ""
 
     def cancel(self):
         self._is_cancelled = True
@@ -291,6 +312,7 @@ class PhyMLApp(QWidget):
         self._mpi_auto_path = ""
         self._cpu_samples = []
         self._mon_procs = {}
+        self._batch_mode = False
         self.phys_cores, self.logi_cores = detect_cores()
         self.initUI()
         self.load_config()
@@ -330,7 +352,9 @@ class PhyMLApp(QWidget):
         self.fasta_path_input = QLineEdit()
         btn_fasta = QPushButton(_t("btn_select_fasta"))
         btn_fasta.clicked.connect(self.browse_fasta)
-        hbox3 = QHBoxLayout(); hbox3.addWidget(self.fasta_path_input); hbox3.addWidget(btn_fasta)
+        btn_fasta_dir = QPushButton(_t("btn_select_dir"))
+        btn_fasta_dir.clicked.connect(self.browse_fasta_dir)
+        hbox3 = QHBoxLayout(); hbox3.addWidget(self.fasta_path_input); hbox3.addWidget(btn_fasta); hbox3.addWidget(btn_fasta_dir)
         path_layout.addRow(_t("input_fasta"), hbox3)
 
         group_paths.setLayout(path_layout)
@@ -427,14 +451,16 @@ class PhyMLApp(QWidget):
         self.status_bar = QStatusBar()
         self.status_bar.setSizeGripEnabled(False)
         self.cores_label = QLabel(_t("cores_info").format(self.phys_cores, self.logi_cores))
+        self.cpu_sys_label = QLabel(_t("cpu_sys").format(0))
         self.cpu_sys_bar = QProgressBar()
         self.cpu_sys_bar.setRange(0, 100)
-        self.cpu_sys_bar.setFixedWidth(120)
-        self.cpu_sys_bar.setTextVisible(False)
-        self.cpu_sys_label = QLabel(_t("cpu_sys").format(0))
+        self.cpu_sys_bar.setTextVisible(True)
+        self.cpu_sys_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.cpu_run_label = QLabel(_t("cpu_analysis_idle"))
-        for w in (self.cores_label, self.cpu_sys_bar, self.cpu_sys_label, self.cpu_run_label):
-            self.status_bar.addPermanentWidget(w)
+        self.status_bar.addWidget(self.cores_label)
+        self.status_bar.addWidget(self.cpu_sys_label)
+        self.status_bar.addWidget(self.cpu_sys_bar, 1)  # stretch: fills all free space
+        self.status_bar.addPermanentWidget(self.cpu_run_label)
         main_layout.addWidget(self.status_bar)
 
         self.cpu_timer = QTimer(self)
@@ -471,6 +497,12 @@ class PhyMLApp(QWidget):
 
     def browse_fasta(self):
         path, _ = QFileDialog.getOpenFileName(self, _t("file_fasta"), "", "FASTA Files (*.fasta *.fas *.fa)")
+        if path:
+            self.fasta_path_input.setText(path)
+            self.fasta_file = path
+
+    def browse_fasta_dir(self):
+        path = QFileDialog.getExistingDirectory(self, _t("file_dir"))
         if path:
             self.fasta_path_input.setText(path)
             self.fasta_file = path
@@ -551,17 +583,26 @@ class PhyMLApp(QWidget):
         if idx >= 0: combo.setCurrentIndex(idx)
 
     def start_pipeline(self):
-        if not self.fasta_file or not os.path.exists(self.fasta_file):
+        target = self.fasta_path_input.text() or self.fasta_file
+        if not target or not os.path.exists(target):
             QMessageBox.warning(self, _t("err_box_title"), _t("err_box_msg")); return
+        if os.path.isdir(target):
+            files = sorted(f for f in os.listdir(target) if f.lower().endswith(('.fasta', '.fas', '.fa')))
+            if not files:
+                QMessageBox.warning(self, _t("err_box_title"), _t("batch_empty")); return
+            files = [os.path.join(target, f) for f in files]
+        else:
+            files = [target]
         if (is_mpi_binary(self.phyml_path_input.text())
                 and not self.chk_use_mpi.isChecked()
                 and self.cb_support_method.currentData() == "bootstrap"):
             QMessageBox.warning(self, _t("mpi_boot_title"), _t("mpi_boot_msg")); return
+        self._batch_mode = len(files) > 1
         self.btn_run.setEnabled(False); self.btn_cancel.setEnabled(True); self.log_console.clear()
         self._cpu_samples = []
         self._mon_procs = {}
         config = self.get_current_config()
-        self.worker = PipelineWorker(config, self.fasta_file)
+        self.worker = PipelineWorker(config, files)
         self.worker.log_signal.connect(lambda msg: self.log_console.append(msg))
         self.worker.finished_signal.connect(self.pipeline_finished)
         self.worker.start()
@@ -576,7 +617,7 @@ class PhyMLApp(QWidget):
         self.btn_run.setEnabled(True); self.btn_cancel.setEnabled(False)
         avg = sum(self._cpu_samples) / len(self._cpu_samples) if self._cpu_samples else 0.0
         self.cpu_run_label.setText(_t("cpu_analysis_done").format(int(avg), round(avg / 100, 1)))
-        if success and self.chk_show_tree.isChecked() and os.path.exists(tree_path):
+        if success and self.chk_show_tree.isChecked() and not self._batch_mode and os.path.exists(tree_path):
             self.log_console.append(_t("sys_open_tree"))
             viewer = TreeViewerDialog(tree_path, self); viewer.exec()
 

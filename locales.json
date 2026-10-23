@@ -87,7 +87,13 @@
         "cpu_analysis_done": "CPU (analysis): finished, avg {}% (~{} cores)",
         "mpi_detected": "[System] MPI PhyML binary detected — MPI mode enabled automatically.",
         "mpi_boot_title": "MPI configuration warning",
-        "mpi_boot_msg": "The selected PhyML binary is an MPI build, but MPI mode is disabled while Bootstrap branch support is selected. MPI builds of PhyML distribute bootstrap replicates across processes and require more than one process.\n\nEnable 'Use MPI' or switch branch support to an aLRT option."
+        "mpi_boot_msg": "The selected PhyML binary is an MPI build, but MPI mode is disabled while Bootstrap branch support is selected. MPI builds of PhyML distribute bootstrap replicates across processes and require more than one process.\n\nEnable 'Use MPI' or switch branch support to an aLRT option.",
+        "btn_select_dir": "Folder (batch)",
+        "file_dir": "Select folder with FASTA files",
+        "batch_found": "[*] Batch mode: {} FASTA files queued.",
+        "batch_empty": "No FASTA files (*.fasta, *.fas, *.fa) found in the selected folder.",
+        "batch_file_header": "\n=== File {}/{}: {} ===",
+        "batch_summary": "\n[+] Batch finished: {}/{} files succeeded."
     },
     "ru": {
         "tree_result": "Результат PhyML: {}",
@@ -177,6 +183,12 @@
         "cpu_analysis_done": "CPU (анализ): завершено, среднее {}% (~{} яд.)",
         "mpi_detected": "[Система] Обнаружен MPI-бинарник PhyML — режим MPI включён автоматически.",
         "mpi_boot_title": "Предупреждение о конфигурации MPI",
-        "mpi_boot_msg": "Выбранный PhyML является MPI-сборкой, но режим MPI выключен при выбранной поддержке ветвей Bootstrap. MPI-сборки PhyML распределяют бутстреп-реплики по процессам и требуют больше одного процесса.\n\nВключите «Использовать MPI» или выберите aLRT-вариант поддержки ветвей."
+        "mpi_boot_msg": "Выбранный PhyML является MPI-сборкой, но режим MPI выключен при выбранной поддержке ветвей Bootstrap. MPI-сборки PhyML распределяют бутстреп-реплики по процессам и требуют больше одного процесса.\n\nВключите «Использовать MPI» или выберите aLRT-вариант поддержки ветвей.",
+        "btn_select_dir": "Папка (пакет)",
+        "file_dir": "Выберите папку с FASTA файлами",
+        "batch_found": "[*] Пакетный режим: в очереди {} FASTA файлов.",
+        "batch_empty": "В выбранной папке нет FASTA файлов (*.fasta, *.fas, *.fa).",
+        "batch_file_header": "\n=== Файл {}/{}: {} ===",
+        "batch_summary": "\n[+] Пакет завершён: успешно {}/{} файлов."
     }
 }
