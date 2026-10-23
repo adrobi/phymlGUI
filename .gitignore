@@ -2,3 +2,5 @@ phyml-mpi.exe
 /build
 /dist
 phymlgui.spec
+__pycache__/
+phyml_config.json
