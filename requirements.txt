@@ -2,3 +2,4 @@ PySide6>=6.5
 matplotlib>=3.5
 biopython>=1.81
 psutil>=5.9
+openpyxl>=3.1

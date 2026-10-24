@@ -144,6 +144,22 @@ class SettingsDialog(QDialog):
         self.setWindowIcon(QIcon(resource_path('icon.png')))
         self.resize(640, 340)
         root = QVBoxLayout(self)
+        engine_box = QGroupBox(_t("settings_engine_box"))
+        eform = QFormLayout(engine_box)
+        self.engine_combo = QComboBox()
+        self.engine_combo.addItem(_t("engine_phyml"), "phyml")
+        self.engine_combo.addItem(_t("engine_iqtree"), "iqtree")
+        idx = self.engine_combo.findData(app_window.engine_setting)
+        self.engine_combo.setCurrentIndex(max(idx, 0))
+        eform.addRow(_t("settings_engine"), self.engine_combo)
+        self.iqtree_edit = QLineEdit(app_window.iqtree_path_input.text())
+        iq_btn = QPushButton(_t("btn_browse"))
+        iq_btn.clicked.connect(lambda: self._browse(self.iqtree_edit))
+        irow = QHBoxLayout(); irow.addWidget(self.iqtree_edit); irow.addWidget(iq_btn)
+        iwrap = QWidget(); iwrap.setLayout(irow)
+        eform.addRow(_t("path_iqtree"), iwrap)
+        root.addWidget(engine_box)
+
         paths_box = QGroupBox(_t("settings_paths"))
         form = QFormLayout(paths_box)
         self.edits = []
@@ -193,6 +209,11 @@ class SettingsDialog(QDialog):
                   self.app_window.muscle_path_input]
         for edit, source in zip(self.edits, inputs):
             source.setText(edit.text())  # programmatic: triggers autosave & MPI detect
+        self.app_window.iqtree_path_input.setText(self.iqtree_edit.text())
+        engine = self.engine_combo.currentData()
+        if engine != self.app_window.engine_setting:
+            self.app_window.engine_setting = engine
+            self.app_window.update_models()
         self.app_window.apply_theme(self.theme_combo.currentData(),
                                     self.accent_combo.currentData())
         if not self.app_window._is_loading:
@@ -213,6 +234,7 @@ class PhyMLApp(QWidget):
         self._batch_mode = False
         self._theme_setting = 'system'
         self._accent_setting = 'green'
+        self.engine_setting = 'phyml'
         self._recent = []
         self._user_presets = {}
         self._failed_files = []
@@ -270,6 +292,7 @@ class PhyMLApp(QWidget):
         self.phyml_path_input.textChanged.connect(self.on_phyml_path_changed)
         self.mpirun_path_input = QLineEdit()
         self.muscle_path_input = QLineEdit()
+        self.iqtree_path_input = QLineEdit()
 
         middle = QWidget()
         v = QVBoxLayout(middle)
@@ -285,6 +308,10 @@ class PhyMLApp(QWidget):
         row = QHBoxLayout(); row.addWidget(self.fasta_path_input, 1)
         row.addWidget(btn_fasta); row.addWidget(btn_fasta_dir)
         v.addLayout(row)
+        self.fasta_info_label = QLabel(' ')
+        self.fasta_info_label.setStyleSheet('color: #9AA0A6;')
+        self.fasta_path_input.textChanged.connect(self._update_fasta_info)
+        v.addWidget(self.fasta_info_label)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -522,11 +549,42 @@ class PhyMLApp(QWidget):
 
     def update_models(self):
         self.cb_model.clear()
-        dt = self.cb_datatype.currentData()
-        models = ["HKY85", "JC69", "K80", "F81", "F84", "TN93", "GTR", "custom"] if dt == "nt" else \
-                 ["LG", "WAG", "JTT", "MtREV", "Dayhoff", "DCMut", "RtREV", "CPREV", "VT", "Blosum62", "MtMam", "MtArt", "HIVw", "HIVb", "custom"]
+        if self.engine_setting == 'iqtree':
+            models = ["MFP", "GTR+F+G4", "HKY2+F+G4", "TIM2+F+G4", "TVM+F+G4"] \
+                if self.cb_datatype.currentData() == "nt" else \
+                ["MFP", "LG+G4", "WAG+G4", "JTT+G4", "mtREV+G4"]
+        else:
+            models = ["HKY85", "JC69", "K80", "F81", "F84", "TN93", "GTR", "custom"] if self.cb_datatype.currentData() == "nt" else \
+                     ["LG", "WAG", "JTT", "MtREV", "Dayhoff", "DCMut", "RtREV", "CPREV", "VT", "Blosum62", "MtMam", "MtArt", "HIVw", "HIVb", "custom"]
         for m in models: self.cb_model.addItem(m, m)
         if not self._is_loading: self.auto_save()
+
+    def _update_fasta_info(self, path):
+        """Quick alignment summary under the FASTA field."""
+        try:
+            if not path or not os.path.exists(path):
+                self.fasta_info_label.setText(' ')
+                return
+            if os.path.isdir(path):
+                n = sum(1 for f in os.listdir(path)
+                        if f.lower().endswith(('.fasta', '.fas', '.fa'))
+                        and not f.lower().endswith('_aligned.fasta'))
+                self.fasta_info_label.setText(_t('fasta_info').format(n, '—', '—', '—'))
+                return
+            from Bio import SeqIO
+            lengths = [len(r.seq) for r in SeqIO.parse(path, 'fasta')]
+            if not lengths:
+                self.fasta_info_label.setText(' ')
+                return
+            gaps = 0
+            total = sum(lengths)
+            for r in SeqIO.parse(path, 'fasta'):
+                gaps += str(r.seq).count('-')
+            pct = round(gaps / total * 100, 1) if total else 0
+            self.fasta_info_label.setText(
+                _t('fasta_info').format(len(lengths), min(lengths), max(lengths), pct))
+        except Exception:
+            self.fasta_info_label.setText(' ')
 
     def browse_fasta(self):
         path, _ = QFileDialog.getOpenFileName(self, _t("file_fasta"), "", "FASTA Files (*.fasta *.fas *.fa)")
@@ -552,6 +610,8 @@ class PhyMLApp(QWidget):
 
     def get_current_config(self):
         return {
+            "engine": self.engine_setting,
+            "iqtree_path": self.iqtree_path_input.text(),
             "phyml_path": self.phyml_path_input.text(),
             "mpirun_path": self.mpirun_path_input.text(),
             "muscle_path": self.muscle_path_input.text(),
@@ -594,6 +654,8 @@ class PhyMLApp(QWidget):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
+                self.engine_setting = config.get("engine", "phyml")
+                self.iqtree_path_input.setText(config.get("iqtree_path", ""))
                 self.phyml_path_input.setText(config.get("phyml_path", ""))
                 mpirun = config.get("mpirun_path", "mpiexec")
                 if mpirun in ("mpirun", "mpiexec"):
@@ -658,7 +720,10 @@ class PhyMLApp(QWidget):
                 files = [target]
         else:
             files = list(files_override)
-        if (is_mpi_binary(self.phyml_path_input.text())
+        if self.engine_setting == 'iqtree':
+            if not self.iqtree_path_input.text() or not os.path.exists(self.iqtree_path_input.text()):
+                QMessageBox.warning(self, _t("err_box_title"), _t("err_iqtree")); return
+        elif (is_mpi_binary(self.phyml_path_input.text())
                 and not self.chk_use_mpi.isChecked()
                 and self.cb_support_method.currentData() == "bootstrap"):
             QMessageBox.warning(self, _t("mpi_boot_title"), _t("mpi_boot_msg")); return
@@ -750,7 +815,8 @@ class PhyMLApp(QWidget):
             'ts': datetime.now().strftime('%Y-%m-%d %H:%M'),
             'input': os.path.basename(self.fasta_path_input.text() or (self.worker.fasta_files[0] if getattr(self.worker, 'fasta_files', None) else '')),
             'ok': n_ok, 'n': n_all, 'time': duration,
-            'model': self.cb_model.currentData() or '',
+            'model': (self.cb_model.currentData() or ''),
+            'engine': self.engine_setting,
             'tree': tree_path if tree_path else '',
         }
         hist = self._load_history()
@@ -888,6 +954,24 @@ class PhyMLApp(QWidget):
                 wr.writerows(self.worker.results)
             self.log_console.append(_t("summary_saved").format(out_path))
         except OSError as e:
+            self.log_console.append(_t("err_summary_save").format(e))
+        # optional Excel workbook with the same data (needs openpyxl)
+        try:
+            from openpyxl import Workbook
+            wb = Workbook()
+            ws = wb.active
+            ws.title = 'Summary'
+            ws.append([_t("sum_col_" + c) for c in fields[:-1]])
+            for r in self.worker.results:
+                ws.append([r.get(c) or '' for c in fields[:-1]])
+            for col, width in zip('ABCDEFGHI', (28, 8, 16, 8, 12, 10, 10, 12)):
+                ws.column_dimensions[col].width = width
+            xlsx_path = out_path[:-4] + '.xlsx'
+            wb.save(xlsx_path)
+            self.log_console.append(_t("xlsx_saved").format(xlsx_path))
+        except ImportError:
+            pass
+        except Exception as e:
             self.log_console.append(_t("err_summary_save").format(e))
 
     def on_phyml_path_changed(self, path):

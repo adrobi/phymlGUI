@@ -29,6 +29,26 @@ def parse_stats(stats_path):
     }
 
 
+def parse_iqtree_stats(stats_path):
+    """Parse key values from an IQ-TREE .iqtree report into a dict."""
+    try:
+        with open(stats_path, encoding='utf-8', errors='replace') as f:
+            content = f.read()
+    except OSError:
+        return {}
+    def grab(pattern):
+        m = re.search(pattern, content)
+        return m.group(1) if m else ""
+    return {
+        'model': grab(r'Best-fit model according to \w+:\s*(\S+)') or grab(r'Model of substitution:\s*(\S+)'),
+        'taxa': grab(r'Input data:\s*(\d+) sequences'),
+        'lnL': grab(r'Log-likelihood of the tree:\s*(-?[\d.]+)'),
+        'gamma': grab(r'Gamma shape alpha:\s*([\d.]+)'),
+        'tstv': '',
+        'time': (grab(r'Total wall-clock time used:\s*([\d.]+)') + ' s').strip(),
+    }
+
+
 # --- Background Worker Thread ---
 class PipelineWorker(QThread):
     log_signal = Signal(str)
@@ -148,7 +168,18 @@ class PipelineWorker(QThread):
 
             if self._is_cancelled: return False, "", {}
 
-            # 3. Run PhyML (MPI support added here)
+            # 3. Run the configured engine
+            engine = self.config.get('engine', 'phyml')
+            if engine == 'iqtree':
+                return self._run_iqtree(phylip_path, creation_flags)
+            return self._run_phyml(phylip_path, creation_flags)
+
+        except Exception as e:
+            self.log_signal.emit(_t("err_crit").format(str(e)))
+            return False, "", ""
+
+    def _run_phyml(self, phylip_path, creation_flags):
+        try:
             phyml_exe = self.config.get("phyml_path", "")
             if not phyml_exe or not os.path.exists(phyml_exe):
                 self.log_signal.emit(_t("err_phyml")); return False, "", {}
@@ -203,6 +234,48 @@ class PipelineWorker(QThread):
                     *(stats.get(k) or "n/a" for k in ('model', 'taxa', 'lnL', 'gamma', 'tstv', 'time'))))
                 return True, tree_path, stats
 
+        except Exception as e:
+            self.log_signal.emit(_t("err_crit").format(str(e)))
+            return False, "", {}
+
+    def _run_iqtree(self, phylip_path, creation_flags):
+        try:
+            iqtree_exe = self.config.get("iqtree_path", "")
+            if not iqtree_exe or not os.path.exists(iqtree_exe):
+                self.log_signal.emit(_t("err_iqtree")); return False, "", {}
+
+            prefix = phylip_path.rsplit('.', 1)[0] + '_iqtree'
+            cmd_iqtree = [iqtree_exe, '-s', phylip_path, '--prefix', prefix,
+                          '-redo', '-m', self.config.get("model", "MFP"),
+                          '-T', self.config.get("mpi_np", "2")]
+            support_method = self.config.get("support_method", "bootstrap")
+            if support_method == "bootstrap":
+                cmd_iqtree.extend(['-B', self.config.get("bootstrap_replicates", "1000")])
+            elif support_method.startswith('-'):
+                cmd_iqtree.extend(['--alrt', '1000'])  # aLRT branch support
+
+            self.log_signal.emit(_t("run_phyml").format(' '.join(cmd_iqtree)))
+            self.active_process = subprocess.Popen(cmd_iqtree, stdout=subprocess.PIPE,
+                                                   stderr=subprocess.STDOUT, text=True,
+                                                   creationflags=creation_flags)
+            for line in iter(self.active_process.stdout.readline, ''):
+                if line: self.log_signal.emit(line.strip())
+                if self._is_cancelled: break
+            self.active_process.stdout.close()
+            self.active_process.wait()
+
+            if self._is_cancelled:
+                self.log_signal.emit(_t("cancel_analysis"))
+                return False, "", {}
+            tree_path = prefix + '.treefile'
+            if self.active_process.returncode != 0 or not os.path.exists(tree_path):
+                self.log_signal.emit(_t("err_crit_phyml").format(self.active_process.returncode))
+                return False, "", {}
+            self.log_signal.emit(_t("success_pipe"))
+            stats = parse_iqtree_stats(prefix + '.iqtree')
+            self.log_signal.emit(_t("stats_summary").format(
+                *(stats.get(k) or "n/a" for k in ('model', 'taxa', 'lnL', 'gamma', 'tstv', 'time'))))
+            return True, tree_path, stats
         except Exception as e:
             self.log_signal.emit(_t("err_crit").format(str(e)))
             return False, "", {}
