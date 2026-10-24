@@ -250,7 +250,7 @@ class PhyMLApp(QWidget):
 
         middle = QWidget()
         v = QVBoxLayout(middle)
-        v.setContentsMargins(0, 0, 0, 0)
+        v.setContentsMargins(0, 0, 8, 0)  # breathing room from the right splitter
         v.setSpacing(8)
 
         v.addWidget(QLabel(_t("input_fasta")))
@@ -406,8 +406,8 @@ class PhyMLApp(QWidget):
         self.status_bar.addWidget(self.cores_label)
         self.status_bar.addWidget(self.cpu_sys_label)
         self.status_bar.addWidget(self.cpu_sys_bar, 1)  # stretch: fills all free space
-        self.status_bar.addPermanentWidget(self.settings_btn)
         self.status_bar.addPermanentWidget(self.cpu_run_label)
+        self.status_bar.addPermanentWidget(self.settings_btn)  # far bottom-right corner
 
         self.cpu_timer = QTimer(self)
         self.cpu_timer.setInterval(1000)

@@ -120,11 +120,15 @@ QListWidget {{ background: {base}; border: 1px solid {border}; border-radius: 4p
 QListWidget::item:selected {{ background: {accent}; color: white; }}
 QListView::item:hover, QListWidget::item:hover {{ background: {hover}; }}
 QScrollBar:vertical {{ background: {bg}; width: 10px; margin: 0; }}
-QScrollBar::handle:vertical {{ background: {border}; border-radius: 5px; min-height: 24px; }}
+QScrollBar::handle:vertical {{ background: {border}; border: none; border-radius: 5px; min-height: 24px; }}
 QScrollBar::handle:vertical:hover {{ background: {accent}; }}
 QScrollBar:horizontal {{ background: {bg}; height: 10px; }}
-QScrollBar::handle:horizontal {{ background: {border}; border-radius: 5px; min-width: 24px; }}
+QScrollBar::handle:horizontal {{ background: {border}; border: none; border-radius: 5px; min-width: 24px; }}
+QScrollBar::handle:horizontal:hover {{ background: {accent}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
+QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: none; }}
 QTableWidget {{ background: {base}; border: 1px solid {border}; gridline-color: {border};
     alternate-background-color: {alt}; }}
 QHeaderView::section {{ background: {button}; border: none; padding: 4px; font-weight: 600; }}
