@@ -1,0 +1,6 @@
+. Model of nucleotides substitution: 	HKY85
+. Number of taxa: 		8
+. Log-likelihood: 		-1811.15467
+  - Gamma shape parameter: 	881.743
+. transition/transversion ratio: 	0.980317
+. Time used:			0h0m0s (0 seconds)

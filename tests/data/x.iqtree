@@ -1,0 +1,4 @@
+Input data: 8 sequences with 600 nucleotide sites
+Best-fit model according to BIC: JC
+Log-likelihood of the tree: -1828.7117 (s.e. 50.96)
+Total wall-clock time used: 0.7434 seconds (0h:0m:0s)

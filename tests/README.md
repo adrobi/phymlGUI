@@ -1,12 +1,14 @@
 # phymlGUI test suites
 
+Binary-free checks run under pytest (`pip install -r requirements-dev.txt`):
+
+    python -m pytest tests/unit tests/gui   # no analysis binaries needed (CI-friendly)
+
 Standalone scripts, runnable on any machine with the Python dependencies:
 
-    python tests/test_smoke.py        # no analysis binaries needed (CI-friendly)
     python tests/run_tests.py         # end-to-end pipeline, needs local binaries
     python tests/test_gui_logic.py    # GUI behaviour + live CPU monitoring
     python tests/test_batch.py        # batch mode + CSV summary + history
-    python tests/test_tree_viewer.py  # layouts, collapse, outgroup, consensus, RF
     python tests/test_iqtree.py       # IQ-TREE engine (skips without the binary)
 
 Suites that need local analysis binaries (`phymlgui v1.1/phyml-mpi.exe`,
