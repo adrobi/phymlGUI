@@ -21,6 +21,18 @@ assert raw == 1 and norm == 1.0, (raw, norm)
 print('PASS rf: identical=0, quartet swap=1 (100%)')
 
 app = phymlgui.QApplication([])
+
+# 1b. circular layout: a polytomy node sits in the middle of its children's arc
+w0 = TreeViewerWidget()
+w0.load_tree_object(Phylo.read(io.StringIO('((A:1,B:1,C:1,D:1):1,E:1,F:1);'), 'newick'), 'polytomy')
+w0.set_layout('circle')
+tree0, coords0 = w0._coords
+node = tree0.root.clades[0]
+child_angles = [coords0[id(c)][1] for c in node.clades]
+expected = (min(child_angles) + max(child_angles)) / 2
+assert abs(coords0[id(node)][1] - expected) < 1e-9, (coords0[id(node)][1], expected)
+print('PASS circle layout: polytomy node centered on its children arc')
+
 if not os.path.isdir('testrun') or not any(
         os.path.exists(os.path.join('testrun', d, f))
         for d in os.listdir('testrun') if os.path.isdir(os.path.join('testrun', d))

@@ -552,7 +552,7 @@ class PhyMLApp(QWidget):
     def update_models(self):
         self.cb_model.clear()
         if self.engine_setting == 'iqtree':
-            models = ["MFP", "GTR+F+G4", "HKY2+F+G4", "TIM2+F+G4", "TVM+F+G4"] \
+            models = ["MFP", "GTR+F+G4", "HKY+F+G4", "TIM2+F+G4", "TVM+F+G4"] \
                 if self.cb_datatype.currentData() == "nt" else \
                 ["MFP", "LG+G4", "WAG+G4", "JTT+G4", "mtREV+G4"]
         else:

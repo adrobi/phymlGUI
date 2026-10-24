@@ -83,4 +83,28 @@ assert w.presets_list.count() >= 3
 assert w.cpu_timer.isActive()
 print('PASS main window builds offscreen')
 
+# 7. a broken input fails the run cleanly instead of killing the worker thread
+from phyml_core.pipeline import PipelineWorker
+empty = os.path.join(tmp, 'empty.fasta')
+open(empty, 'w').close()
+worker = PipelineWorker({'engine': 'phyml'}, [empty])
+done = []
+worker.finished_signal.connect(lambda ok, tree: done.append((ok, tree)))
+try:
+    worker.run()
+except Exception as e:
+    raise AssertionError(f'worker crashed on an empty FASTA: {e!r}')
+assert done == [(False, '')], done
+assert worker.results[0]['status'] == 'FAIL', worker.results
+print('PASS empty fasta: run fails cleanly, finished signal emitted')
+
+# 8. IQ-TREE UFBoot refuses < 1000 replicates: the PhyML-sized value is raised
+from phyml_core.pipeline import ufboot_replicates
+assert ufboot_replicates('100') == '1000'
+assert ufboot_replicates('1000') == '1000'
+assert ufboot_replicates('5000') == '5000'
+assert ufboot_replicates('') == '1000'
+assert ufboot_replicates('abc') == '1000'
+print('PASS ufboot replicates: raised to the IQ-TREE minimum of 1000')
+
 print('ALL SMOKE TESTS PASSED')

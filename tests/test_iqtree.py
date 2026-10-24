@@ -52,6 +52,19 @@ lnl_file = re.search(r'Log-likelihood of the tree:\s*(-?[\d.]+)', iq_report).gro
 assert row['lnL'] == lnl_file, (row['lnL'], lnl_file)
 print(f'PASS iqtree engine: MFP picked {row["model"]}, lnL {row["lnL"]}, 8 taxa')
 
+# 1b. PhyML-sized replicate count (100) must not break UFBoot (needs >= 1000)
+os.chdir(run_dir)
+logs, done = [], []
+worker = phymlgui.PipelineWorker(dict(config, bootstrap_replicates='100'),
+                                 os.path.abspath('test_prealigned.fasta'))
+worker.log_signal.connect(logs.append)
+worker.finished_signal.connect(lambda ok, tree: done.append((ok, tree)))
+worker.run()
+os.chdir(ROOT)
+assert done[0][0], 'iqtree with 100 replicates failed:\n' + '\n'.join(logs[-8:])
+assert any(' -B 1000' in l for l in logs), 'UFBoot replicates were not raised to 1000'
+print('PASS iqtree ufboot: 100 replicates raised to 1000, run succeeds')
+
 # 2. GUI: engine validation, model list, full run + xlsx summary
 cfg_bak = phymlgui.CONFIG_FILE + '.bak'
 had_cfg = os.path.exists(phymlgui.CONFIG_FILE)
@@ -70,18 +83,49 @@ try:
     assert warned and (w.worker is None or not w.worker.isRunning())
 
     w.iqtree_path_input.setText(IQTREE_EXE)
+    w.set_combo_by_data(w.cb_support_method, 'bootstrap')
     w.le_bootstrap_replicates.setText('100')
     w.start_pipeline()
     guard = 0
     while not w.btn_run.isEnabled() and guard < 400:
         app.processEvents(); time.sleep(0.3); guard += 1
     assert w.btn_run.isEnabled(), 'GUI iqtree run did not finish'
+    assert w.worker.results[0]['status'] == 'OK', \
+        'GUI iqtree run failed:\n' + w.log_console.toPlainText()[-800:]
     xlsx = os.path.join(run_dir, 'phymlgui_summary.xlsx')
     assert os.path.exists(xlsx), 'xlsx summary missing'
     from openpyxl import load_workbook
     wb = load_workbook(xlsx)
     assert wb.active.max_row == 2
     print('PASS iqtree GUI: validation, model list, run + xlsx summary')
+
+    # 3. every model offered in the IQ-TREE model list is accepted by IQ-TREE
+    import random
+    import subprocess
+    rnd = random.Random(7)
+    aa_phy = os.path.join(run_dir, 'models_aa.phy')
+    with open(aa_phy, 'w') as f:
+        base = ''.join(rnd.choice('ACDEFGHIKLMNPQRSTVWY') for _ in range(120))
+        f.write('6 120\n')
+        for i in range(6):
+            seq = ''.join(c if rnd.random() > 0.15 else rnd.choice('ACDEFGHIKLMNPQRSTVWY')
+                          for c in base)
+            f.write(f'P{i} {seq}\n')
+    alignments = {'nt': os.path.join(run_dir, 'test_prealigned.phy'), 'aa': aa_phy}
+    rejected = []
+    for dt, phy in alignments.items():
+        w.set_combo_by_data(w.cb_datatype, dt)
+        models = [w.cb_model.itemData(i) for i in range(w.cb_model.count())]
+        for m in models:
+            if m == 'MFP':
+                continue  # ModelFinder is exercised by the runs above
+            r = subprocess.run([IQTREE_EXE, '-s', phy, '-m', m, '-n', '0', '-T', '1', '-redo',
+                                '--prefix', os.path.join(run_dir, 'model_probe')],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                rejected.append(m)
+    assert not rejected, f'IQ-TREE rejects listed models: {rejected}'
+    print('PASS iqtree models: every listed nt/aa model is accepted by IQ-TREE')
 finally:
     if had_cfg:
         shutil.move(cfg_bak, phymlgui.CONFIG_FILE)

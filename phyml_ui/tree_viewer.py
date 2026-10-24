@@ -341,17 +341,18 @@ class TreeViewerWidget(QWidget):
                 return coords[id(cl)]
             child_pos = [assign(c, x) for c in cl.clades]
             if self.layout == 'circle':
-                # radius = the node's own cumulative depth (rightward growth)
-                ang = sum(p[1] for p in child_pos) / len(child_pos)
-                # average angle over the shortest arc
+                # radius = the node's own cumulative depth (rightward growth);
+                # angle = middle of the shortest arc covering all children,
+                # i.e. the full circle minus the widest gap between neighbours
+                two_pi = 2 * math.pi
                 angs = sorted(p[1] for p in child_pos)
-                best, best_span = None, 1e9
-                for i, a0 in enumerate(angs):
-                    a1 = angs[(i - 1) % len(angs)]  # predecessor going backwards
-                    span = (a0 - a1) % (2 * 3.141592653589793)
-                    if span < best_span:
-                        best_span, best = span, (a1 + span / 2) % (2 * 3.141592653589793)
-                coords[id(cl)] = (x, best)
+                if len(angs) == 1:
+                    mid = angs[0]
+                else:
+                    gap, start = max(((angs[i] - angs[i - 1]) % two_pi, angs[i])
+                                     for i in range(len(angs)))
+                    mid = (start + (two_pi - gap) / 2) % two_pi
+                coords[id(cl)] = (x, mid)
             else:
                 # x = the node's own cumulative depth: every branch grows rightward
                 y_c = sum(p[1] for p in child_pos) / len(child_pos)

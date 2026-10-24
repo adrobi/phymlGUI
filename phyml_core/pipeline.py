@@ -49,6 +49,18 @@ def parse_iqtree_stats(stats_path):
     }
 
 
+UFBOOT_MIN_REPLICATES = 1000
+
+
+def ufboot_replicates(value):
+    """IQ-TREE -B value: UFBoot refuses fewer than 1000 replicates."""
+    try:
+        n = int(str(value).strip())
+    except ValueError:
+        n = 0
+    return str(max(n, UFBOOT_MIN_REPLICATES))
+
+
 # --- Background Worker Thread ---
 class PipelineWorker(QThread):
     log_signal = Signal(str)
@@ -176,7 +188,7 @@ class PipelineWorker(QThread):
 
         except Exception as e:
             self.log_signal.emit(_t("err_crit").format(str(e)))
-            return False, "", ""
+            return False, "", {}
 
     def _run_phyml(self, phylip_path, creation_flags):
         try:
@@ -250,7 +262,11 @@ class PipelineWorker(QThread):
                           '-T', self.config.get("mpi_np", "2")]
             support_method = self.config.get("support_method", "bootstrap")
             if support_method == "bootstrap":
-                cmd_iqtree.extend(['-B', self.config.get("bootstrap_replicates", "1000")])
+                requested = self.config.get("bootstrap_replicates", "1000")
+                replicates = ufboot_replicates(requested)
+                if replicates != str(requested).strip():
+                    self.log_signal.emit(_t("iqtree_ufboot_min").format(replicates, requested))
+                cmd_iqtree.extend(['-B', replicates])
             elif support_method.startswith('-'):
                 cmd_iqtree.extend(['--alrt', '1000'])  # aLRT branch support
 
