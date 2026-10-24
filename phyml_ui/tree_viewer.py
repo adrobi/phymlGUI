@@ -60,7 +60,7 @@ class TreeViewerWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.figure = Figure()
-        self.figure.patch.set_alpha(0.0)
+        self.figure.patch.set_facecolor('#FFFFFF')
         self.canvas = FigureCanvas(self.figure)
         self.nav = NavigationToolbar2QT(self.canvas, self)  # hidden: drives zoom/pan
         self.nav.setVisible(False)
@@ -76,6 +76,9 @@ class TreeViewerWidget(QWidget):
         self._collapsed = set()     # frozensets of terminal names
         self._coords = None         # (tree, coords) of the last render
         self._leaf_order = []
+        self._text = '#424242'      # branch / label color, set per theme
+        self._accent = '#1E9E6A'
+        self._bg = '#FFFFFF'
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -110,7 +113,8 @@ class TreeViewerWidget(QWidget):
             lambda _: self.set_layout(self.layout_combo.currentData()))
         self.chk_supports = QCheckBox(_t("tree_supports"))
         self.chk_supports.setChecked(True)
-        self.chk_supports.toggled.connect(self._rerender)
+        self.chk_supports.toggled.connect(
+            lambda on: (setattr(self, 'show_supports', on), self._rerender()))
         self.threshold_slider = QSlider(Qt.Horizontal)
         self.threshold_slider.setRange(0, 100)
         self.threshold_slider.setValue(0)
@@ -119,7 +123,8 @@ class TreeViewerWidget(QWidget):
         self.threshold_label = QLabel(_t("tree_threshold").format(0))
         self.chk_grid = QCheckBox(_t("tree_grid"))
         self.chk_grid.setChecked(True)
-        self.chk_grid.toggled.connect(self._rerender)
+        self.chk_grid.toggled.connect(
+            lambda on: (setattr(self, 'show_grid', on), self._rerender()))
         self.outgroup_combo = QComboBox()
         self.outgroup_combo.setMinimumWidth(110)
         self.outgroup_combo.currentIndexChanged.connect(self._outgroup_changed)
@@ -174,9 +179,15 @@ class TreeViewerWidget(QWidget):
             path += '.' + ext
         try:
             self.figure.savefig(path, dpi=200, bbox_inches='tight',
-                                facecolor='white')
+                                facecolor=self._bg)
         except Exception as e:
             QMessageBox.warning(self, _t("tree_export"), str(e))
+
+    def set_colors(self, text, accent, bg):
+        """Theme-aware rendering colors; re-renders the current tree."""
+        self._text, self._accent, self._bg = text, accent, bg
+        self.figure.patch.set_facecolor(bg)
+        self._rerender()
 
     # ---------- options handlers ----------
 
@@ -361,15 +372,33 @@ class TreeViewerWidget(QWidget):
         except Exception as e:
             self._draw_error(e)
 
+    @staticmethod
+    def _nice_ticks(vmax):
+        """1-2-5 progression ticks covering (0, vmax] with ~5 steps."""
+        if vmax <= 0:
+            return []
+        raw = vmax / 5.0
+        mag = 10 ** math.floor(math.log10(raw)) if raw > 0 else 1
+        step = 10 * mag
+        for m in (1, 2, 5):
+            if m * mag >= raw:
+                step = m * mag
+                break
+        ticks, t = [], step
+        while t < vmax * 1.001:
+            ticks.append(t)
+            t += step
+        return ticks
+
     def _render(self):
         self.ax.clear()
         self._coords = None
         tree = self._prep_tree()
         coords, max_x, display_leaves = self._compute_layout(tree)
         self._coords = (tree, coords)
-        accent = '#1E9E6A'
-        text = '#424242'
-        faint = '#B9BEC4'
+        text, accent, bg = self._text, self._accent, self._bg
+        faint = '#9AA0A6'
+        grid_c = '#AEB4BB'
 
         def support_of(cl):
             if cl.confidence is not None:
@@ -379,13 +408,16 @@ class TreeViewerWidget(QWidget):
             except (TypeError, ValueError):
                 return None
 
+        def fmt_support(s):
+            return f"{s:.0f}" if s >= 1 else f"{s:.2f}"
+
         def edge_color(cl):
             s = support_of(cl)
             if self.threshold > 0 and s is not None:
                 return accent if s >= self.threshold else faint
             return text
 
-        segments, colors = [], []
+        segments, colors, support_pos = [], [], []
         circ = self.layout == 'circle'
 
         def draw_edges(cl, parent_pos):
@@ -394,6 +426,9 @@ class TreeViewerWidget(QWidget):
                 cx, cy = x * math.cos(a), x * math.sin(a)
                 segments.append([parent_pos, (cx, cy)])
                 colors.append(edge_color(cl))
+                if not cl.is_terminal():
+                    mx, my = (parent_pos[0] + cx) / 2, (parent_pos[1] + cy) / 2
+                    support_pos.append((mx, my, cl))
                 for c in cl.clades:
                     draw_edges(c, (cx, cy))
             else:
@@ -402,9 +437,14 @@ class TreeViewerWidget(QWidget):
                 if self.layout == 'rect':
                     segments.append([(px, py), (px, y)])   # elbow at parent's x
                     segments.append([(px, y), (x, y)])
+                    colors.append(edge_color(cl)); colors.append(edge_color(cl))
+                    if not cl.is_terminal():
+                        support_pos.append(((px + x) / 2, y, cl))
                 else:
                     segments.append([(px, py), (x, y)])
-                colors.append(edge_color(cl))
+                    colors.append(edge_color(cl))
+                    if not cl.is_terminal():
+                        support_pos.append(((px + x) / 2, (py + y) / 2, cl))
                 for c in cl.clades:
                     draw_edges(c, (x, y))
 
@@ -425,67 +465,80 @@ class TreeViewerWidget(QWidget):
             for c in root.clades:
                 draw_edges(c, (0.0, ra))
 
-        lc = LineCollection(segments, colors=colors, linewidths=1.4, zorder=2)
-        self.ax.add_collection(lc)
+        # ---- distance grid (drawn manually: set_axis_off hides ax.grid) ----
+        ticks = self._nice_ticks(max_x)
+        ys = [p[1] for p in coords.values()]
+        if circ:
+            lim = max_x * 1.18
+            y_min, y_max = -lim, lim
+        else:
+            y_min, y_max = min(ys), max(ys)
+        if self.show_grid:
+            import matplotlib.patches as mpatches
+            for t in ticks:
+                if circ:
+                    self.ax.add_patch(mpatches.Circle(
+                        (0, 0), t, fill=False, linestyle=':', linewidth=0.7,
+                        color=grid_c, alpha=0.85, zorder=0))
+                    self.ax.text(t, max_x * 0.03, f"{t:g}", fontsize=6.5,
+                                 color=faint, ha='left', va='bottom', zorder=1)
+                else:
+                    self.ax.plot([t, t], [y_min, y_max + 0.6], linestyle=':',
+                                 linewidth=0.7, color=grid_c, alpha=0.9, zorder=0)
+                    self.ax.text(t, y_min - 0.35, f"{t:g}", fontsize=7,
+                                 color=faint, ha='center', va='top', zorder=1)
+            if not circ and ticks:
+                self.ax.text(max_x / 2, y_min - 0.9, _t("tree_axis_label"),
+                             fontsize=7, color=faint, ha='center', va='top')
 
-        # leaf labels
+        self.ax.add_collection(LineCollection(segments, colors=colors,
+                                              linewidths=1.5, zorder=2))
+
+        # ---- leaf labels ----
+        leaf_anchors = []
         for cl in display_leaves:
             x, a = coords[id(cl)]
             if circ:
-                lx, ly = (x + max_x * 0.02) * math.cos(a), (x + max_x * 0.02) * math.sin(a)
+                lx, ly = (x + max_x * 0.025) * math.cos(a), (x + max_x * 0.025) * math.sin(a)
                 ha = 'left' if math.cos(a) >= 0 else 'right'
                 self.ax.text(lx, ly, cl.name or '', fontsize=8, color=text,
-                             ha=ha, va='center', zorder=3)
+                             ha=ha, va='center', zorder=4)
             else:
-                self.ax.text(x + max_x * 0.01, a, cl.name or '', fontsize=8,
-                             color=text, va='center', zorder=3)
+                lx = x + max_x * 0.012
+                self.ax.text(lx, a, cl.name or '', fontsize=8.5,
+                             color=text, va='center', zorder=4)
+                leaf_anchors.append((lx, a))
 
-        # support labels on internal nodes
+        # ---- support labels at branch midpoints, nudged apart ----
         if self.show_supports:
-            for cl in tree.get_nonterminals():
-                if id(cl) not in coords:
-                    continue
+            placed = list(leaf_anchors)  # never overlap a taxon label either
+            for x, y, cl in sorted(support_pos, key=lambda p: -p[1]):
                 s = support_of(cl)
                 if s is None:
                     continue
-                x, a = coords[id(cl)]
-                if circ:
-                    lx, ly = x * math.cos(a), x * math.sin(a)
-                else:
-                    lx, ly = x, a
-                color = accent if (self.threshold > 0 and s >= self.threshold) else text
-                self.ax.text(lx, ly, f"{s:.0f}" if s > 1 else f"{s:.2f}",
-                             fontsize=7, color=color, style='italic',
-                             ha='center', va='bottom', zorder=3)
+                yy = y
+                for px_, py_ in placed:
+                    if abs(px_ - x) < max_x * 0.25 and abs(py_ - yy) < 0.5:
+                        yy = py_ + 0.5
+                placed.append((x, yy))
+                strong = self.threshold > 0 and s >= self.threshold
+                self.ax.text(x, yy + 0.14, fmt_support(s), fontsize=7,
+                             color=accent if strong else text, style='italic',
+                             ha='center', va='bottom', zorder=5,
+                             bbox=dict(boxstyle='round,pad=0.12', fc=bg,
+                                       ec='none', alpha=0.85))
 
-        # scale bar (rect/slanted) or subtle rings (circular)
-        if circ:
-            step = 10 ** (len(str(int(max_x))) - 1) if max_x >= 1 else 0.01
-            ring = step
-            while ring < max_x * 1.05:
-                self.ax.add_patch(_ring(ring))
-                ring += step
-        else:
-            bar = max_x * 0.15 if max_x > 0 else 0.0
-            ys = [p[1] for p in coords.values()]
-            y0 = min(ys) - (max(ys) - min(ys)) * 0.06 - 1
-            self.ax.plot([0, bar], [y0, y0], color=text, lw=1.2, zorder=3)
-            self.ax.text(bar / 2, y0 - 0.4, f"{bar:.3g}", fontsize=7,
-                         color=text, ha='center', zorder=3)
-
-        if self.show_grid and not circ:
-            self.ax.grid(True, linestyle=':', linewidth=0.5, alpha=0.3, zorder=0)
+        # ---- limits with proportional padding ----
         self.ax.set_axis_off()
         if circ:
-            lim = max_x * 1.3
             self.ax.set_xlim(-lim, lim); self.ax.set_ylim(-lim, lim)
             self.ax.set_aspect('equal')
         else:
-            xs = [p[0] for p in coords.values()]
-            ys = [p[1] for p in coords.values()]
-            self.ax.set_xlim(min(xs) - 0.05, max(xs) * 1.25 + 0.1)
-            self.ax.set_ylim(min(ys) - 1.5, max(ys) + 0.8)
-        self.ax.set_title(self.tree_title, fontsize=10, pad=8)
+            pad_x = max_x * 0.45 if display_leaves else max_x * 0.05
+            self.ax.set_xlim(-max_x * 0.02, max_x + pad_x)
+            self.ax.set_ylim(y_min - 1.2, y_max + 0.9)
+        self.ax.set_title(self.tree_title, fontsize=10, pad=10, color=text)
+        self.figure.tight_layout()
         self.canvas.draw_idle()
 
     def _clade_at(self, x, y):
@@ -537,12 +590,6 @@ class TreeViewerWidget(QWidget):
                      va='center', color='red', fontsize=12,
                      transform=self.ax.transAxes)
         self.canvas.draw_idle()
-
-
-def _ring(radius):
-    import matplotlib.patches as mpatches
-    return mpatches.Circle((0, 0), radius, fill=False,
-                           linestyle=':', linewidth=0.5, color='#B9BEC4')
 
 
 # --- Kept for backward compatibility: modal dialog wrapping the widget ---

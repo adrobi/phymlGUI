@@ -52,6 +52,22 @@ for layout in ('rect', 'slanted', 'circle'):
     assert w.layout == layout
 print('PASS layouts: rect / slanted / circle render')
 
+# 2b. manual distance grid is actually drawn (ax.grid dies with axis_off)
+w.set_layout('rect')
+from matplotlib.lines import Line2D
+grid_on = sum(1 for l in w.ax.lines if isinstance(l, Line2D))
+w.chk_grid.setChecked(False)
+grid_off = sum(1 for l in w.ax.lines if isinstance(l, Line2D))
+w.chk_grid.setChecked(True)
+assert grid_on >= 3 and grid_off < grid_on, (grid_on, grid_off)
+print(f'PASS grid: {grid_on} distance gridlines drawn, toggleable')
+
+# 2c. theme-aware colors recolor the render
+w.set_colors('#E6E8EB', '#37C894', '#26282D')
+assert w._bg == '#26282D' and w.figure.patch.get_facecolor()[:3] != (1, 1, 1)
+w.set_colors('#424242', '#1E9E6A', '#FFFFFF')
+print('PASS theme colors: branches/background follow the app theme')
+
 # 3. support threshold + grid toggles do not break rendering
 w.threshold_slider.setValue(70)
 assert w.threshold == 70

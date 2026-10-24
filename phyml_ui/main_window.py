@@ -22,7 +22,7 @@ from phyml_core.i18n import _t
 from phyml_core.utils import psutil, detect_cores, is_mpi_binary, resource_path
 from phyml_core.pipeline import PipelineWorker
 from phyml_ui.tree_viewer import TreeViewerWidget
-from phyml_ui.themes import resolve, build_qss, role_colors, ACCENTS
+from phyml_ui.themes import resolve, build_qss, role_colors, ACCENTS, PALETTES
 
 CONFIG_FILE = 'phyml_config.json'
 HISTORY_FILE = 'phyml_history.json'
@@ -513,6 +513,8 @@ class PhyMLApp(QWidget):
         theme, accent = resolve(self._theme_setting, self._accent_setting)
         QApplication.instance().setStyleSheet(build_qss(theme, accent))
         self.log_console.set_role_colors(role_colors(theme, accent))
+        pal = PALETTES[theme]
+        self.tree_view.set_colors(pal['text'], accent, pal['base'])
 
     def _refresh_recent(self):
         self.recent_list.clear()
