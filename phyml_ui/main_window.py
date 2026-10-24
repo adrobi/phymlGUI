@@ -1,5 +1,5 @@
+import copy
 import csv
-import json
 import os
 import shutil
 from datetime import datetime
@@ -17,33 +17,19 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence
 
-from phyml_core import __version__
+from phyml_core import __version__, presets, settings
+from phyml_core.history import HistoryStore, best_tree, display_input, new_record
 from phyml_core.i18n import _t
+from phyml_core.paths import AppPaths
 from phyml_core.utils import psutil, detect_cores, is_mpi_binary, resource_path
 from phyml_core.pipeline import PipelineWorker
 from phyml_ui.tree_viewer import TreeViewerWidget
 from phyml_ui.themes import resolve, build_qss, role_colors, ACCENTS, PALETTES
 
-CONFIG_FILE = 'phyml_config.json'
-HISTORY_FILE = 'phyml_history.json'
-
-# parameter subset persisted in presets (no paths, no display options)
-_PRESET_KEYS = ('datatype', 'model', 'support_method', 'bootstrap_replicates',
-                'freq', 'tstv', 'pinv', 'classes', 'gamma', 'search',
-                'optimize', 'parsimony')
-
-_BUILTIN_PRESETS = {
-    'preset_builtin_screen': {
-        'datatype': 'nt', 'model': 'HKY85', 'support_method': '-4',
-        'bootstrap_replicates': '100', 'freq': 'default', 'tstv': 'e',
-        'pinv': '0.0', 'classes': '4', 'gamma': 'e', 'search': 'NNI',
-        'optimize': 'tlr', 'parsimony': False},
-    'preset_builtin_pub': {
-        'datatype': 'nt', 'model': 'GTR', 'support_method': 'bootstrap',
-        'bootstrap_replicates': '1000', 'freq': 'default', 'tstv': 'e',
-        'pinv': 'e', 'classes': '4', 'gamma': 'e', 'search': 'BEST',
-        'optimize': 'tlr', 'parsimony': False},
-}
+# per-file values of a worker row that go into the history
+_STAT_KEYS = ('model', 'taxa', 'lnL', 'gamma', 'tstv', 'time')
+# settings that say nothing about how a run was made: left out of a history record
+_NOT_RUN_PARAMS = ('presets', 'recent', 'window')
 
 
 class LogConsole(QWidget):
@@ -223,9 +209,15 @@ class SettingsDialog(QDialog):
 
 # --- Main Application Window ---
 class PhyMLApp(QWidget):
-    def __init__(self):
+    def __init__(self, paths=None):
         super().__init__()
+        self.paths = paths if paths is not None else AppPaths.detect()
+        self.history_store = HistoryStore(self.paths.history_file)
         self._is_loading = True
+        self._autosave_blocked = False  # set when the settings file could not be read
+        self._save_failed = False       # the last auto_save failed (the error is logged once)
+        self._extra_settings = {}       # keys of the settings file this version does not know
+        self._history_records = []      # the records shown in history_list, same order
         self.worker = None
         self.fasta_file = ""
         self._mpi_auto_path = ""
@@ -643,63 +635,103 @@ class PhyMLApp(QWidget):
             }
         }
 
+    def _log(self, text):
+        """A system line for the log; messages from the core modules may end with a newline."""
+        self.log_console.append(text.rstrip('\n'))
+
     def auto_save(self):
-        config = self.get_current_config()
+        if self._autosave_blocked:
+            return
+        data = dict(self._extra_settings)
+        data.update(settings.to_disk(self.get_current_config(), self.paths))
+        data['schema_version'] = settings.SCHEMA_VERSION
         try:
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=4, ensure_ascii=False)
-        except: pass
+            settings.save(self.paths.config_file, data)
+            self._save_failed = False
+        except OSError as e:
+            if not self._save_failed:   # every field change saves: report a failure once
+                self._log(_t('err_settings_save').format(e))
+            self._save_failed = True
+
+    def _migrate_legacy_files(self):
+        """Copy config/history from the working folder of older versions, once."""
+        try:
+            cwd = os.getcwd()
+            copied = settings.migrate_legacy(self.paths, cwd)
+        except OSError as e:
+            self._log(_t('err_load').format(e))
+            return
+        for name in copied:
+            self._log(_t('settings_migrated').format(
+                os.path.join(cwd, name), os.path.join(self.paths.data_dir, name)))
 
     def load_config(self):
         self.update_models()
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                self.engine_setting = config.get("engine", "phyml")
-                self.iqtree_path_input.setText(config.get("iqtree_path", ""))
-                self.phyml_path_input.setText(config.get("phyml_path", ""))
-                mpirun = config.get("mpirun_path", "mpiexec")
-                if mpirun in ("mpirun", "mpiexec"):
-                    mpirun = shutil.which("mpiexec") or shutil.which("mpirun") or mpirun
-                self.mpirun_path_input.setText(mpirun)
-                self.muscle_path_input.setText(config.get("muscle_path", ""))
-                self.set_combo_by_data(self.cb_datatype, config.get("datatype", "nt"))
-                self.update_models()
-                self.set_combo_by_data(self.cb_model, config.get("model", "HKY85"))
-                self.set_combo_by_data(self.cb_freq, config.get("freq", "default"))
-                self.set_combo_by_data(self.cb_support_method, config.get("support_method", "bootstrap"))
-                self.set_combo_by_data(self.cb_search, config.get("search", "NNI"))
-                self.set_combo_by_data(self.cb_optimize, config.get("optimize", "tlr"))
-                self.le_bootstrap_replicates.setText(config.get("bootstrap_replicates", "100"))
-                self.chk_use_mpi.setChecked(config.get("use_mpi", False))
-                self.le_mpi_np.setText(config.get("mpi_np", str(self.phys_cores)))
-                self.le_tstv.setText(config.get("tstv", "e"))
-                self.le_pinv.setText(config.get("pinv", "0.0"))
-                self.le_classes.setText(config.get("classes", "4"))
-                self.le_gamma.setText(config.get("gamma", "e"))
-                self.chk_parsimony.setChecked(config.get("parsimony", False))
-                self.chk_show_tree.setChecked(config.get("show_tree", True))
-                self._recent = [p for p in config.get("recent", []) if os.path.exists(p)]
-                self._refresh_recent()
-                self._user_presets = dict(config.get("presets", {}))
-                self._refresh_presets()
-                self._refresh_history()
-                self.apply_theme(config.get("theme", "system"),
-                                 config.get("accent", "green"))
-                win = config.get("window") or {}
-                if win.get("w") and win.get("h"):
-                    self.resize(min(win["w"], 4096), min(win["h"], 4096))
-                if isinstance(win.get("splitter"), list) and len(win["splitter"]) == 2:
-                    self.splitter.setSizes(win["splitter"])
-                if isinstance(win.get("vsplit"), list) and len(win["vsplit"]) == 2:
-                    self.right_split.setSizes(win["vsplit"])
-                self.toggle_bootstrap_input()
-                self.log_console.append(_t("sys_load"))
-            except Exception as e: self.log_console.append(_t("err_load").format(e))
+        self._migrate_legacy_files()
+        problems = []
+        try:
+            raw = settings.load(self.paths.config_file, on_error=problems.append)
+        except OSError as e:
+            # The file is there but unreadable: work with defaults, but never save them
+            # over the user's real settings.
+            self._autosave_blocked = True
+            problems.append(_t('err_load').format(e))
+            raw = copy.deepcopy(settings.DEFAULTS)
+        for message in problems:
+            self._log(message)
+        self._extra_settings = {k: v for k, v in raw.items() if k not in settings.DEFAULTS}
+        try:
+            self._apply_config(settings.from_disk(raw, self.paths))
+            if not problems and os.path.isfile(self.paths.config_file):
+                self._log(_t("sys_load"))
+        except Exception as e:
+            self._log(_t("err_load").format(e))
         # lists must be populated even without a config file
         self._refresh_presets()
         self._refresh_history()
+
+    def _apply_config(self, config):
+        """Show a settings dict (as returned by settings.from_disk) in the window."""
+        self.engine_setting = config["engine"]
+        self.iqtree_path_input.setText(config["iqtree_path"])
+        self.phyml_path_input.setText(config["phyml_path"])
+        mpirun = config["mpirun_path"]
+        if mpirun in ("mpirun", "mpiexec"):
+            mpirun = shutil.which("mpiexec") or shutil.which("mpirun") or mpirun
+        self.mpirun_path_input.setText(mpirun)
+        self.muscle_path_input.setText(config["muscle_path"])
+        self._apply_model_params(config)
+        self.chk_use_mpi.setChecked(config["use_mpi"])
+        self.le_mpi_np.setText(config["mpi_np"] or str(self.phys_cores))  # '' = physical cores
+        self.chk_show_tree.setChecked(config["show_tree"])
+        self._recent = [p for p in config["recent"] if isinstance(p, str) and os.path.exists(p)]
+        self._refresh_recent()
+        self._user_presets = dict(config["presets"])
+        self.apply_theme(config["theme"], config["accent"])
+        win = config["window"]
+        if win.get("w") and win.get("h"):
+            self.resize(min(win["w"], 4096), min(win["h"], 4096))
+        if isinstance(win.get("splitter"), list) and len(win["splitter"]) == 2:
+            self.splitter.setSizes(win["splitter"])
+        if isinstance(win.get("vsplit"), list) and len(win["vsplit"]) == 2:
+            self.right_split.setSizes(win["vsplit"])
+        self.toggle_bootstrap_input()
+
+    def _apply_model_params(self, params):
+        """Show the model and search parameters (the part presets also carry)."""
+        self.set_combo_by_data(self.cb_datatype, params["datatype"])
+        self.update_models()
+        self.set_combo_by_data(self.cb_model, params["model"])
+        self.set_combo_by_data(self.cb_freq, params["freq"])
+        self.set_combo_by_data(self.cb_support_method, params["support_method"])
+        self.set_combo_by_data(self.cb_search, params["search"])
+        self.set_combo_by_data(self.cb_optimize, params["optimize"])
+        self.le_bootstrap_replicates.setText(params["bootstrap_replicates"])
+        self.le_tstv.setText(params["tstv"])
+        self.le_pinv.setText(params["pinv"])
+        self.le_classes.setText(params["classes"])
+        self.le_gamma.setText(params["gamma"])
+        self.chk_parsimony.setChecked(params["parsimony"])
 
     def set_combo_by_data(self, combo, data_val):
         idx = combo.findData(data_val)
@@ -804,46 +836,52 @@ class PhyMLApp(QWidget):
 
     # ---------- history ----------
 
-    def _load_history(self):
-        try:
-            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return []
-
     def _append_history(self, n_ok, n_all, tree_path):
-        duration = ''
-        if self._run_started:
-            duration = f'{(datetime.now() - self._run_started).total_seconds():.0f}s'
-        rec = {
-            'ts': datetime.now().strftime('%Y-%m-%d %H:%M'),
-            'input': os.path.basename(self.fasta_path_input.text() or (self.worker.fasta_files[0] if getattr(self.worker, 'fasta_files', None) else '')),
-            'ok': n_ok, 'n': n_all, 'time': duration,
-            'model': (self.cb_model.currentData() or ''),
-            'engine': self.engine_setting,
-            'tree': tree_path if tree_path else '',
-        }
-        hist = self._load_history()
-        hist.insert(0, rec)
+        """Add the finished run to the history, as the worker's rows describe it.
+
+        The counts and the best tree follow from those rows, so n_ok, n_all and tree_path
+        only keep the signature of the call.
+        """
+        worker = self.worker
+        fasta_files = list(getattr(worker, 'fasta_files', None) or [])
+        rows = list(getattr(worker, 'results', None) or [])
+        config = getattr(worker, 'config', None)   # what the run used, not what the form shows now
+        if not isinstance(config, dict):
+            config = self.get_current_config()
+        params = {k: v for k, v in config.items() if k not in _NOT_RUN_PARAMS}
+        files = [{'file': path,
+                  'status': 'ok' if row.get('status') == 'OK' else 'fail',
+                  'tree': row.get('tree', ''),
+                  'stats': {k: row.get(k, '') for k in _STAT_KEYS},
+                  'error': row.get('error', '')}
+                 for path, row in zip(fasta_files, rows)]
+        target = self.fasta_path_input.text() or self.fasta_file or (fasta_files[0] if fasta_files else '')
+        duration = (datetime.now() - self._run_started).total_seconds() if self._run_started else 0.0
+        rec = new_record(inputs=[target] if target else [],
+                         engine=params.get('engine') or self.engine_setting,
+                         params=params, files=files, duration_s=duration)
         try:
-            with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
-                json.dump(hist[:200], f, indent=2, ensure_ascii=False)
-        except OSError:
-            pass
+            self.history_store.append(rec)
+        except OSError as e:
+            self._log(_t('err_settings_save').format(e))
         self._refresh_history()
 
     def _refresh_history(self):
         self.history_list.clear()
-        for rec in self._load_history()[:50]:
+        try:
+            self._history_records = self.history_store.load(on_error=self._log)[:50]
+        except OSError as e:
+            self._history_records = []
+            self._log(_t('err_load').format(e))
+        for rec in self._history_records:
             self.history_list.addItem(_t('hist_entry').format(
-                rec.get('ts', ''), rec.get('input', ''), rec.get('ok', 0), rec.get('n', 0)))
+                rec.get('ts', ''), display_input(rec), rec.get('ok', 0), rec.get('n', 0)))
 
     def _open_history_entry(self, item):
         row = self.history_list.row(item)
-        hist = self._load_history()[:50]
-        if row >= len(hist):
+        if row >= len(self._history_records):
             return
-        tree = hist[row].get('tree', '')
+        tree = best_tree(self._history_records[row])
         if tree and os.path.exists(tree):
             self.tree_view.load_tree(tree)
         else:
@@ -856,7 +894,7 @@ class PhyMLApp(QWidget):
         save_item = QListWidgetItem(_t('preset_save_current'))
         save_item.setData(Qt.UserRole, '__save__')
         self.presets_list.addItem(save_item)
-        for label_key in _BUILTIN_PRESETS:
+        for label_key in presets.BUILTIN:
             it = QListWidgetItem(_t(label_key))
             it.setData(Qt.UserRole, ('builtin', label_key))
             self.presets_list.addItem(it)
@@ -871,26 +909,16 @@ class PhyMLApp(QWidget):
             self._save_preset()
             return
         kind, key = data
-        params = _BUILTIN_PRESETS[key] if kind == 'builtin' else self._user_presets.get(key, {})
-        self._apply_preset(params)
+        preset = presets.BUILTIN[key] if kind == 'builtin' else self._user_presets.get(key, {})
+        self._apply_preset(preset)
         self.log_console.append(_t('preset_applied').format(item.text()))
 
-    def _apply_preset(self, params):
+    def _apply_preset(self, preset):
+        params = presets.apply(preset, self.get_current_config())
         self._is_loading = True
         try:
-            self.set_combo_by_data(self.cb_datatype, params.get('datatype', 'nt'))
-            self.update_models()
-            self.set_combo_by_data(self.cb_model, params.get('model', 'HKY85'))
-            self.set_combo_by_data(self.cb_support_method, params.get('support_method', 'bootstrap'))
-            self.set_combo_by_data(self.cb_freq, params.get('freq', 'default'))
-            self.set_combo_by_data(self.cb_search, params.get('search', 'NNI'))
-            self.set_combo_by_data(self.cb_optimize, params.get('optimize', 'tlr'))
-            self.le_bootstrap_replicates.setText(params.get('bootstrap_replicates', '100'))
-            self.le_tstv.setText(params.get('tstv', 'e'))
-            self.le_pinv.setText(params.get('pinv', '0.0'))
-            self.le_classes.setText(params.get('classes', '4'))
-            self.le_gamma.setText(params.get('gamma', 'e'))
-            self.chk_parsimony.setChecked(params.get('parsimony', False))
+            self.engine_setting = params['engine']
+            self._apply_model_params(params)
         finally:
             self._is_loading = False
         self.toggle_bootstrap_input()
@@ -901,8 +929,7 @@ class PhyMLApp(QWidget):
         if not ok or not name.strip():
             return
         name = name.strip()
-        cfg = self.get_current_config()
-        self._user_presets[name] = {k: cfg.get(k) for k in _PRESET_KEYS}
+        self._user_presets[name] = presets.extract(self.get_current_config())
         self.auto_save()
         self._refresh_presets()
         self.log_console.append(_t('preset_saved').format(name))

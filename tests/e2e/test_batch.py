@@ -1,12 +1,11 @@
 """Batch mode: a folder of FASTA files, CSV summary, queue and history."""
-import json
 import shutil
 
 import pytest
 from Bio import Phylo
 
-import phyml_ui.main_window as main_window
 from datasets import phyml_config, synthetic  # noqa: F401  (fixture)
+from phyml_core.history import HistoryStore
 from phyml_core.pipeline import PipelineWorker
 
 pytestmark = [pytest.mark.needs_phyml, pytest.mark.needs_mpi, pytest.mark.needs_muscle]
@@ -85,8 +84,7 @@ def test_queue_history_open_folder(gui_batch):
     assert window.queue_list.count() == 2
     statuses = [window.queue_list.item(i).text().split('  ')[-1] for i in range(2)]
     assert statuses == ['✓', '✓'], statuses
-    with open(main_window.HISTORY_FILE, encoding='utf-8') as f:
-        records = json.load(f)
+    records = HistoryStore(window.paths.history_file).load()
     assert records and records[0]['n'] == 2 and records[0]['ok'] == 2
     assert window.history_list.count() >= 1
     assert window.open_dir_btn.isEnabled()

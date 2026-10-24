@@ -1,6 +1,8 @@
 import os
 import sys
 
+from .paths import default_app_dir
+
 try:
     import psutil  # optional: CPU monitoring and physical core detection
 except ImportError:
@@ -8,11 +10,9 @@ except ImportError:
 
 
 def resource_path(relative_path):
-    """ Get the absolute path to a resource (required for correct operation within .exe) """
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
+    """Absolute path to a bundled resource: inside the PyInstaller bundle when frozen,
+    otherwise next to the program (never relative to the current working folder)."""
+    base_path = getattr(sys, '_MEIPASS', None) or default_app_dir()
     return os.path.join(base_path, relative_path)
 
 

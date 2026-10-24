@@ -13,8 +13,9 @@ Layout:
 - `e2e/` - end-to-end runs of the pipeline, batch mode, CPU monitor and IQ-TREE engine.
   `e2e/datasets.py` holds the synthetic two-clade dataset (fixture `synthetic`).
 - `data/` - static fixtures (stats files, trees).
-- `conftest.py` - binary lookup, markers, the `isolated_config` fixture and a session guard
-  that fails the run if a test rewrites the real `phyml_config.json` / `phyml_history.json`.
+- `conftest.py` - binary lookup, markers, the `data_dir` / `make_window` / `window` fixtures
+  (config and history in a temporary folder) and a session guard that fails the run if a test
+  rewrites the real `phyml_config.json` / `phyml_history.json`.
 
 ## Binaries and markers
 

@@ -59,26 +59,59 @@ def binaries():
 
 
 @pytest.fixture
-def isolated_config(tmp_path, monkeypatch):
-    """Point the window's config/history files at tmp_path (interim: Task 5 uses data_dir)."""
-    import phyml_ui.main_window as main_window
-    monkeypatch.setattr(main_window, 'CONFIG_FILE', str(tmp_path / 'phyml_config.json'))
-    monkeypatch.setattr(main_window, 'HISTORY_FILE', str(tmp_path / 'phyml_history.json'))
-    return tmp_path
+def data_dir(tmp_path, monkeypatch):
+    """An empty user-data folder for the window, and an empty working folder.
+
+    PHYMLGUI_DATA_DIR sends config and history to tmp_path/data. The cwd is moved to the
+    empty tmp_path/cwd, so the legacy migration finds no phyml_config.json there (the real
+    one sits in the repository root) and nothing a test does can reach the real files.
+    """
+    data = tmp_path / 'data'
+    cwd = tmp_path / 'cwd'
+    data.mkdir()
+    cwd.mkdir()
+    monkeypatch.setenv('PHYMLGUI_DATA_DIR', str(data))
+    monkeypatch.chdir(cwd)
+    return data
 
 
 @pytest.fixture
-def window(isolated_config, qtbot):
-    """A PhyMLApp on isolated config/history files, closed by qtbot at teardown.
+def make_window(data_dir, qtbot, qapp):
+    """Factory of PhyMLApp windows on the isolated data folder: make_window(paths=None).
 
-    isolated_config must be listed BEFORE qtbot: fixtures are torn down in
-    reverse order, and closing the window runs closeEvent -> auto_save(), which
-    must still write the patched (tmp_path) config, never the real one.
+    The windows are destroyed at teardown, not just closed, and the application stylesheet
+    is put back. A started window styles the whole application, and a closed window that
+    stays alive makes every later one slower to build (a deleteLater() that only goes
+    through processEvents() never deletes anything).
+
+    data_dir is a dependency, so it is torn down after the windows: closing a window runs
+    closeEvent -> auto_save(), which must still see the isolated folder (the env override
+    and the cwd), never the real one.
     """
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication
     from phyml_ui.main_window import PhyMLApp
-    w = PhyMLApp()
-    qtbot.addWidget(w)
-    return w
+    original_style = qapp.styleSheet()
+    created = []
+
+    def make(paths=None):
+        w = PhyMLApp(paths=paths)
+        qtbot.addWidget(w)
+        created.append(w)
+        return w
+
+    yield make
+    for w in created:
+        w.close()
+        w.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    qapp.setStyleSheet(original_style)
+
+
+@pytest.fixture
+def window(make_window):
+    """A PhyMLApp on an isolated data folder (see make_window)."""
+    return make_window()
 
 
 @pytest.fixture
