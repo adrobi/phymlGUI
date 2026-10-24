@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QCheckBox, QGroupBox, QSizePolicy, QLabel,
                              QStatusBar, QProgressBar, QSplitter, QToolBox,
                              QListWidget, QListWidgetItem, QTextEdit,
-                             QTableWidget, QTableWidgetItem, QHeaderView)
+                             QTableWidget, QTableWidgetItem, QHeaderView,
+                             QScrollArea, QDialog, QDialogButtonBox)
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence
 
@@ -112,6 +113,47 @@ class LogConsole(QWidget):
                 self._append_html(text, role)
 
 
+class SettingsDialog(QDialog):
+    """Rarely changed executable paths, kept out of the main window."""
+
+    FIELDS = ('path_phyml', 'path_mpirun', 'path_muscle')
+
+    def __init__(self, app_window, parent=None):
+        super().__init__(parent)
+        self.app_window = app_window
+        self.setWindowTitle(_t("settings_title"))
+        self.setWindowIcon(QIcon(resource_path('icon.png')))
+        form = QFormLayout(self)
+        self.edits = []
+        inputs = [app_window.phyml_path_input, app_window.mpirun_path_input,
+                  app_window.muscle_path_input]
+        for key, source in zip(self.FIELDS, inputs):
+            edit = QLineEdit(source.text())
+            btn = QPushButton(_t("btn_browse"))
+            btn.clicked.connect(lambda _=False, e=edit: self._browse(e))
+            row = QHBoxLayout(); row.addWidget(edit); row.addWidget(btn)
+            wrap = QWidget(); wrap.setLayout(row)
+            form.addRow(_t(key), wrap)
+            self.edits.append(edit)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def _browse(self, edit):
+        path, _ = QFileDialog.getOpenFileName(self, _t("file_exe"))
+        if path:
+            edit.setText(path)
+
+    def accept(self):
+        inputs = [self.app_window.phyml_path_input,
+                  self.app_window.mpirun_path_input,
+                  self.app_window.muscle_path_input]
+        for edit, source in zip(self.edits, inputs):
+            source.setText(edit.text())  # programmatic: triggers autosave & MPI detect
+        super().accept()
+
+
 # --- Main Application Window ---
 class PhyMLApp(QWidget):
     def __init__(self):
@@ -135,17 +177,20 @@ class PhyMLApp(QWidget):
     def initUI(self):
         self.setWindowTitle(f'phymlGUI {__version__}')
         self.setWindowIcon(QIcon(resource_path('icon.png')))
-        self.resize(1280, 820)
-        self.setMinimumSize(980, 600)  # must stay usable at 1366x768
+        self.resize(1440, 860)
+        self.setMinimumSize(1080, 600)  # must stay usable at 1366x768
         self.setAcceptDrops(True)
 
         root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(6, 6, 6, 6)
         self.splitter = QSplitter(Qt.Horizontal)
         root_layout.addWidget(self.splitter, 1)
+        root_layout.addWidget(self._build_status_bar())
 
         self.splitter.addWidget(self._build_left_panel())
+        self.splitter.addWidget(self._build_middle_pane())
         self.splitter.addWidget(self._build_right_pane())
-        self.splitter.setSizes([230, 1050])
+        self.splitter.setSizes([210, 360, 870])
         self.splitter.setChildrenCollapsible(True)
 
         QShortcut(QKeySequence(Qt.Key_F9), self, self.toggle_side_panel)
@@ -172,56 +217,44 @@ class PhyMLApp(QWidget):
         self.panel.addItem(self.history_list, _t("panel_history"))
         return self.panel
 
-    def _build_right_pane(self):
-        right = QWidget()
-        main_layout = QVBoxLayout(right)
-        main_layout.setSpacing(8)
-
-        # 1. Group: Paths
-        group_paths = QGroupBox(_t("group_paths"))
-        path_layout = QFormLayout()
-
+    def _build_middle_pane(self):
+        """FASTA input + parameter groups (each on its own plate) + controls."""
+        # hidden holders for engine paths; edited via the Settings dialog
         self.phyml_path_input = QLineEdit()
         self.phyml_path_input.textChanged.connect(self.on_phyml_path_changed)
-        btn_phyml = QPushButton(_t("btn_browse"))
-        btn_phyml.clicked.connect(lambda: self.browse_file(self.phyml_path_input))
-        hbox1 = QHBoxLayout(); hbox1.addWidget(self.phyml_path_input); hbox1.addWidget(btn_phyml)
-        path_layout.addRow(_t("path_phyml"), hbox1)
-
         self.mpirun_path_input = QLineEdit()
-        btn_mpirun = QPushButton(_t("btn_browse"))
-        btn_mpirun.clicked.connect(lambda: self.browse_file(self.mpirun_path_input))
-        hbox_mpi_path = QHBoxLayout(); hbox_mpi_path.addWidget(self.mpirun_path_input); hbox_mpi_path.addWidget(btn_mpirun)
-        path_layout.addRow(_t("path_mpirun"), hbox_mpi_path)
-
         self.muscle_path_input = QLineEdit()
-        btn_muscle = QPushButton(_t("btn_browse"))
-        btn_muscle.clicked.connect(lambda: self.browse_file(self.muscle_path_input))
-        hbox2 = QHBoxLayout(); hbox2.addWidget(self.muscle_path_input); hbox2.addWidget(btn_muscle)
-        path_layout.addRow(_t("path_muscle"), hbox2)
 
+        middle = QWidget()
+        v = QVBoxLayout(middle)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(8)
+
+        v.addWidget(QLabel(_t("input_fasta")))
         self.fasta_path_input = QLineEdit()
         btn_fasta = QPushButton(_t("btn_select_fasta"))
         btn_fasta.clicked.connect(self.browse_fasta)
         btn_fasta_dir = QPushButton(_t("btn_select_dir"))
         btn_fasta_dir.clicked.connect(self.browse_fasta_dir)
-        hbox3 = QHBoxLayout(); hbox3.addWidget(self.fasta_path_input); hbox3.addWidget(btn_fasta); hbox3.addWidget(btn_fasta_dir)
-        path_layout.addRow(_t("input_fasta"), hbox3)
+        row = QHBoxLayout(); row.addWidget(self.fasta_path_input, 1)
+        row.addWidget(btn_fasta); row.addWidget(btn_fasta_dir)
+        v.addLayout(row)
 
-        group_paths.setLayout(path_layout)
-        main_layout.addWidget(group_paths)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        plates = QWidget()
+        pv = QVBoxLayout(plates)
+        pv.setContentsMargins(0, 0, 4, 0)
+        pv.setSpacing(10)
 
-        # 2. Parameter Tabs
-        self.tabs = QTabWidget()
-        self.tabs.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-
-        tab_basic = QWidget()
-        form_basic = QFormLayout(tab_basic)
-
+        gb_model = QGroupBox(_t("tab_model"))
+        form_basic = QFormLayout(gb_model)
         self.chk_use_mpi = QCheckBox(_t("lbl_use_mpi"))
         self.le_mpi_np = QLineEdit(str(self.phys_cores))
         self.le_mpi_np.setFixedWidth(50)
-        mpi_hbox = QHBoxLayout(); mpi_hbox.addWidget(self.chk_use_mpi); mpi_hbox.addWidget(QLabel(_t("lbl_mpi_np"))); mpi_hbox.addWidget(self.le_mpi_np); mpi_hbox.addStretch()
+        mpi_hbox = QHBoxLayout(); mpi_hbox.addWidget(self.chk_use_mpi)
+        mpi_hbox.addWidget(QLabel(_t("lbl_mpi_np"))); mpi_hbox.addWidget(self.le_mpi_np)
+        mpi_hbox.addStretch()
         form_basic.addRow(_t("mode_mpi"), mpi_hbox)
 
         self.cb_datatype = QComboBox()
@@ -242,10 +275,10 @@ class PhyMLApp(QWidget):
 
         self.le_bootstrap_replicates = QLineEdit("100")
         form_basic.addRow(_t("lbl_boot"), self.le_bootstrap_replicates)
-        self.tabs.addTab(tab_basic, _t("tab_model"))
+        pv.addWidget(gb_model)
 
-        tab_model = QWidget()
-        form_model = QFormLayout(tab_model)
+        gb_evo = QGroupBox(_t("tab_evo"))
+        form_model = QFormLayout(gb_evo)
         self.cb_freq = QComboBox()
         self.cb_freq.addItem(_t("freq_def"), "default"); self.cb_freq.addItem(_t("freq_emp"), "e"); self.cb_freq.addItem(_t("freq_ml"), "m")
         form_model.addRow(_t("lbl_freq"), self.cb_freq)
@@ -253,10 +286,10 @@ class PhyMLApp(QWidget):
         self.le_pinv = QLineEdit("0.0"); form_model.addRow(_t("lbl_pinv"), self.le_pinv)
         self.le_classes = QLineEdit("4"); form_model.addRow(_t("lbl_classes"), self.le_classes)
         self.le_gamma = QLineEdit("e"); form_model.addRow(_t("lbl_gamma"), self.le_gamma)
-        self.tabs.addTab(tab_model, _t("tab_evo"))
+        pv.addWidget(gb_evo)
 
-        tab_tree = QWidget()
-        form_tree = QFormLayout(tab_tree)
+        gb_search = QGroupBox(_t("tab_search"))
+        form_tree = QFormLayout(gb_search)
         self.cb_search = QComboBox()
         self.cb_search.addItem(_t("search_nni"), "NNI"); self.cb_search.addItem(_t("search_spr"), "SPR"); self.cb_search.addItem(_t("search_best"), "BEST")
         form_tree.addRow(_t("lbl_search"), self.cb_search)
@@ -264,35 +297,41 @@ class PhyMLApp(QWidget):
         self.cb_optimize.addItem(_t("opt_tlr"), "tlr"); self.cb_optimize.addItem(_t("opt_tl"), "tl"); self.cb_optimize.addItem(_t("opt_lr"), "lr")
         self.cb_optimize.addItem(_t("opt_l"), "l"); self.cb_optimize.addItem(_t("opt_r"), "r"); self.cb_optimize.addItem(_t("opt_n"), "n")
         form_tree.addRow(_t("lbl_opt"), self.cb_optimize)
-        self.chk_parsimony = QCheckBox(_t("chk_pars")); form_tree.addRow("", self.chk_parsimony)
-        self.tabs.addTab(tab_tree, _t("tab_search"))
+        self.chk_parsimony = QCheckBox(_t("chk_pars"))
+        form_tree.addRow(self.chk_parsimony)
+        pv.addWidget(gb_search)
+        pv.addStretch(1)
 
-        main_layout.addWidget(self.tabs)
+        scroll.setWidget(plates)
+        v.addWidget(scroll, 1)
 
-        # 3. Controls
-        control_layout = QHBoxLayout()
+        control_row = QHBoxLayout()
         self.btn_run = QPushButton(_t("btn_run"))
-        self.btn_run.setStyleSheet(f"background-color: #2196F3; color: white; padding: 10px; font-weight: bold;")
+        self.btn_run.setObjectName('btn_run')
         self.btn_run.clicked.connect(self.start_pipeline)
-
         self.btn_cancel = QPushButton(_t("btn_cancel"))
-        self.btn_cancel.setStyleSheet(f"background-color: #F44336; color: white; padding: 10px; font-weight: bold;")
+        self.btn_cancel.setObjectName('btn_cancel')
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self.cancel_pipeline)
-
         self.chk_show_tree = QCheckBox(_t("chk_show"))
         self.chk_show_tree.setChecked(True)
+        control_row.addWidget(self.btn_run)
+        control_row.addWidget(self.btn_cancel)
+        control_row.addStretch(1)
+        control_row.addWidget(self.chk_show_tree)
+        v.addLayout(control_row)
+        return middle
 
-        control_layout.addWidget(self.btn_run); control_layout.addWidget(self.btn_cancel); control_layout.addWidget(self.chk_show_tree)
-        main_layout.addLayout(control_layout)
+    def _build_right_pane(self):
+        """Big tree viewer on top, Log/Stats/Summary tabs underneath."""
+        right = QWidget()
+        v = QVBoxLayout(right)
+        v.setContentsMargins(0, 0, 0, 0)
+        self.tree_view = TreeViewerWidget()
 
-        # 4. Results tabs: Log | Tree | Stats | Summary
         self.result_tabs = QTabWidget()
         self.log_console = LogConsole()
         self.result_tabs.addTab(self.log_console, _t("tab_log"))
-
-        self.tree_view = TreeViewerWidget()
-        self.result_tabs.addTab(self.tree_view, _t("tab_tree"))
 
         stats_tab = QWidget()
         stats_lay = QVBoxLayout(stats_tab)
@@ -300,6 +339,7 @@ class PhyMLApp(QWidget):
         self.stats_table = QTableWidget(0, 2)
         self.stats_table.horizontalHeader().setVisible(False)
         self.stats_table.verticalHeader().setVisible(False)
+        self.stats_table.setAlternatingRowColors(True)
         self.stats_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.stats_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         stats_lay.addWidget(self.stats_file_label)
@@ -307,11 +347,22 @@ class PhyMLApp(QWidget):
         self.result_tabs.addTab(stats_tab, _t("tab_stats"))
 
         self.summary_table = QTableWidget(0, 8)
-        self.summary_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.summary_table.verticalHeader().setVisible(False)
+        self.summary_table.setAlternatingRowColors(True)
+        self.summary_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for col in range(1, 8):
+            self.summary_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeToContents)
         self.result_tabs.addTab(self.summary_table, _t("tab_summary"))
-        main_layout.addWidget(self.result_tabs, 1)
 
-        # 5. Status bar: core info + live CPU utilization + theme toggle
+        split = QSplitter(Qt.Vertical)
+        split.addWidget(self.tree_view)
+        split.addWidget(self.result_tabs)
+        split.setSizes([470, 260])
+        split.setChildrenCollapsible(False)
+        v.addWidget(split, 1)
+        return right
+
+    def _build_status_bar(self):
         self.status_bar = QStatusBar()
         self.status_bar.setSizeGripEnabled(False)
         self.cores_label = QLabel(_t("cores_info").format(self.phys_cores, self.logi_cores))
@@ -321,24 +372,18 @@ class PhyMLApp(QWidget):
         self.cpu_sys_bar.setTextVisible(True)
         self.cpu_sys_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.cpu_run_label = QLabel(_t("cpu_analysis_idle"))
-        self.theme_btn = QPushButton("☾")
-        self.theme_btn.setFixedSize(30, 24)
+        self.settings_btn = QPushButton(_t("btn_settings"))
+        self.settings_btn.clicked.connect(self.open_settings)
+        self.theme_btn = QPushButton(_t("theme_btn_light"))
         self.theme_btn.setToolTip(_t("theme_toggle"))
         self.theme_btn.clicked.connect(self.toggle_theme)
         self.status_bar.addWidget(self.cores_label)
         self.status_bar.addWidget(self.cpu_sys_label)
         self.status_bar.addWidget(self.cpu_sys_bar, 1)  # stretch: fills all free space
+        self.status_bar.addPermanentWidget(self.settings_btn)
         self.status_bar.addPermanentWidget(self.cpu_run_label)
         self.status_bar.addPermanentWidget(self.theme_btn)
-        main_layout.addWidget(self.status_bar)
-
-        self.cpu_timer = QTimer(self)
-        self.cpu_timer.setInterval(1000)
-        self.cpu_timer.timeout.connect(self.update_cpu_status)
-        if psutil is not None:
-            self.cpu_timer.start()
-
-        return right
+        return self.status_bar
 
     # ---------- drag & drop ----------
 
@@ -355,10 +400,13 @@ class PhyMLApp(QWidget):
         self.fasta_file = p
         event.acceptProposedAction()
 
-    # ---------- panel / theme helpers ----------
+    # ---------- panel / theme / settings helpers ----------
 
     def toggle_side_panel(self):
         self.panel.setVisible(not self.panel.isVisible())
+
+    def open_settings(self):
+        SettingsDialog(self, self).exec()
 
     def toggle_theme(self):
         self._theme = 'dark' if self._theme == 'light' else 'light'
@@ -369,7 +417,7 @@ class PhyMLApp(QWidget):
     def apply_theme(self, name):
         from PySide6.QtWidgets import QApplication
         self._theme = name if name in THEMES else 'light'
-        self.theme_btn.setText('☀' if self._theme == 'dark' else '☾')
+        self.theme_btn.setText(_t("theme_btn_dark") if self._theme == 'dark' else _t("theme_btn_light"))
         QApplication.instance().setStyleSheet(THEMES[self._theme])
 
     def _refresh_recent(self):
@@ -411,10 +459,6 @@ class PhyMLApp(QWidget):
                  ["LG", "WAG", "JTT", "MtREV", "Dayhoff", "DCMut", "RtREV", "CPREV", "VT", "Blosum62", "MtMam", "MtArt", "HIVw", "HIVb", "custom"]
         for m in models: self.cb_model.addItem(m, m)
         if not self._is_loading: self.auto_save()
-
-    def browse_file(self, line_edit):
-        path, _ = QFileDialog.getOpenFileName(self, _t("file_exe"))
-        if path: line_edit.setText(path)
 
     def browse_fasta(self):
         path, _ = QFileDialog.getOpenFileName(self, _t("file_fasta"), "", "FASTA Files (*.fasta *.fas *.fa)")
@@ -553,10 +597,8 @@ class PhyMLApp(QWidget):
             self._populate_stats()
             self._populate_summary()
             self._save_summary_csv()
-        if success and tree_path and os.path.exists(tree_path):
+        if success and tree_path and os.path.exists(tree_path) and self.chk_show_tree.isChecked():
             self.tree_view.load_tree(tree_path)
-            if self.chk_show_tree.isChecked() and not self._batch_mode:
-                self.result_tabs.setCurrentWidget(self.tree_view)
 
     def _populate_stats(self):
         rows = [r for r in self.worker.results if r['status'] == 'OK']
