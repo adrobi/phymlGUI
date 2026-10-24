@@ -60,16 +60,18 @@ def _coerce(value, default):
 
 
 def load(path: str, on_error: Optional[Callable[[str], None]] = None) -> dict:
-    """Settings from path over DEFAULTS. Never raises: a missing, damaged or unreadable
-    file yields the defaults (a damaged one is first copied to path + '.broken')."""
-    if not os.path.exists(path):
-        return copy.deepcopy(DEFAULTS)
+    """Settings from path over DEFAULTS.
+
+    A missing file yields the defaults. A file with damaged content (not JSON, not an
+    object, not UTF-8) yields the defaults too, after its bytes are copied to
+    path + '.broken' and on_error is told. A file that exists but cannot be read raises
+    its OSError: returning defaults there would let a later save overwrite the user's
+    real settings after a transient lock or permission error.
+    """
     try:
         with open(path, 'rb') as f:
             raw = f.read()
-    except OSError as e:
-        if on_error:
-            on_error(_t('err_load').format(e))
+    except FileNotFoundError:
         return copy.deepcopy(DEFAULTS)
     try:
         data = json.loads(raw.decode('utf-8-sig'))
@@ -151,16 +153,22 @@ def from_disk(cfg: dict, paths: AppPaths) -> dict:
 def migrate_legacy(paths: AppPaths, cwd: str) -> List[str]:
     """Copy config/history from the old location (the working folder) into data_dir.
 
-    Done only while data_dir has no config yet and cwd is a different folder, so it runs
-    once. The originals stay in place. Returns the names of the copied files.
+    Runs only while data_dir has no config yet and cwd is a different folder. A file that
+    already exists in data_dir is never overwritten, so a repeated call (history-only
+    legacy folder, config deleted to reset settings, crash before the first save) copies
+    nothing new. The history goes first and the config last: the config is what closes
+    the gate, so a failed history copy leaves the migration to be retried. The originals
+    stay in place. Returns the names of the files copied.
     """
     if os.path.realpath(cwd) == os.path.realpath(paths.data_dir):
         return []
     if os.path.exists(paths.config_file):
         return []
-    found = [n for n in (CONFIG_NAME, HISTORY_NAME) if os.path.isfile(os.path.join(cwd, n))]
-    if found:
+    pending = [n for n in (HISTORY_NAME, CONFIG_NAME)
+               if os.path.isfile(os.path.join(cwd, n))
+               and not os.path.exists(os.path.join(paths.data_dir, n))]
+    if pending:
         os.makedirs(paths.data_dir, exist_ok=True)
-    for name in found:
+    for name in pending:
         shutil.copy2(os.path.join(cwd, name), os.path.join(paths.data_dir, name))
-    return found
+    return pending

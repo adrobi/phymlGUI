@@ -103,10 +103,13 @@ def test_load_non_utf8_file_is_broken(tmp_path):
     assert len(errors) == 1 and (tmp_path / 'c.json.broken').read_bytes() == path.read_bytes()
 
 
-def test_load_unreadable_path_returns_defaults_and_reports(tmp_path):
+def test_load_unreadable_existing_file_raises(tmp_path):
+    # the path exists but cannot be read (a directory is deterministic on Windows and POSIX):
+    # load must not hand out defaults that a later save would write over the real settings
     errors = []
-    cfg = settings.load(str(tmp_path), on_error=errors.append)   # a directory, not a file
-    assert cfg == settings.DEFAULTS and len(errors) == 1
+    with pytest.raises(OSError):
+        settings.load(str(tmp_path), on_error=errors.append)
+    assert errors == [] and not os.path.exists(str(tmp_path) + '.broken')
 
 
 def test_save_is_atomic_and_roundtrips(tmp_path):
@@ -199,7 +202,7 @@ def test_migrate_legacy_copies_once(tmp_path):
     (cwd / CONFIG_NAME).write_text('{"model": "GTR"}', 'utf-8')
     (cwd / HISTORY_NAME).write_text('[]', 'utf-8')
     p = AppPaths(app_dir=str(tmp_path), data_dir=str(data))
-    assert sorted(settings.migrate_legacy(p, str(cwd))) == sorted([CONFIG_NAME, HISTORY_NAME])
+    assert settings.migrate_legacy(p, str(cwd)) == [HISTORY_NAME, CONFIG_NAME]  # config last
     assert (data / CONFIG_NAME).read_text('utf-8') == '{"model": "GTR"}'
     assert (data / HISTORY_NAME).read_text('utf-8') == '[]'
     assert (cwd / CONFIG_NAME).exists() and (cwd / HISTORY_NAME).exists()  # originals stay
@@ -215,6 +218,57 @@ def test_migrate_legacy_copies_what_exists(tmp_path):
     p = AppPaths(app_dir=str(tmp_path), data_dir=str(data))
     assert settings.migrate_legacy(p, str(cwd)) == [HISTORY_NAME]
     assert not (data / CONFIG_NAME).exists()
+
+
+def test_migrate_legacy_history_only_copies_once(tmp_path):
+    cwd = tmp_path / 'cwd'
+    data = tmp_path / 'data'
+    cwd.mkdir()
+    data.mkdir()
+    (cwd / HISTORY_NAME).write_text('["old"]', 'utf-8')
+    p = AppPaths(app_dir=str(tmp_path), data_dir=str(data))
+    assert settings.migrate_legacy(p, str(cwd)) == [HISTORY_NAME]
+    (data / HISTORY_NAME).write_text('["newer, written by the app"]', 'utf-8')
+    assert settings.migrate_legacy(p, str(cwd)) == []        # no config in data_dir, still once
+    assert (data / HISTORY_NAME).read_text('utf-8') == '["newer, written by the app"]'
+    assert not (data / CONFIG_NAME).exists()
+
+
+def test_migrate_legacy_never_overwrites_existing_files(tmp_path):
+    cwd = tmp_path / 'cwd'
+    data = tmp_path / 'data'
+    cwd.mkdir()
+    data.mkdir()
+    (cwd / CONFIG_NAME).write_text('{"model": "GTR"}', 'utf-8')
+    (cwd / HISTORY_NAME).write_text('["old"]', 'utf-8')
+    (data / HISTORY_NAME).write_text('["keep me"]', 'utf-8')    # the app died before saving a config
+    p = AppPaths(app_dir=str(tmp_path), data_dir=str(data))
+    assert settings.migrate_legacy(p, str(cwd)) == [CONFIG_NAME]
+    assert (data / HISTORY_NAME).read_text('utf-8') == '["keep me"]'
+    assert (data / CONFIG_NAME).read_text('utf-8') == '{"model": "GTR"}'
+
+
+def test_migrate_legacy_failed_history_copy_keeps_gate_open(tmp_path, monkeypatch):
+    cwd = tmp_path / 'cwd'
+    data = tmp_path / 'data'
+    cwd.mkdir()
+    data.mkdir()
+    (cwd / CONFIG_NAME).write_text('{"model": "GTR"}', 'utf-8')
+    (cwd / HISTORY_NAME).write_text('[]', 'utf-8')
+    p = AppPaths(app_dir=str(tmp_path), data_dir=str(data))
+    real_copy2 = settings.shutil.copy2
+
+    def failing_copy2(src, dst, **kwargs):
+        if os.path.basename(src) == HISTORY_NAME:
+            raise OSError('disk full')
+        return real_copy2(src, dst, **kwargs)
+
+    monkeypatch.setattr(settings.shutil, 'copy2', failing_copy2)
+    with pytest.raises(OSError):
+        settings.migrate_legacy(p, str(cwd))
+    assert not (data / CONFIG_NAME).exists()                 # config not copied: the gate stays open
+    monkeypatch.undo()
+    assert settings.migrate_legacy(p, str(cwd)) == [HISTORY_NAME, CONFIG_NAME]   # retried in full
 
 
 def test_migrate_legacy_nothing_to_copy(tmp_path):
