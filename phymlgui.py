@@ -10,8 +10,16 @@ from phyml_core.utils import psutil, detect_cores, is_mpi_binary, resource_path 
 from phyml_ui.main_window import PhyMLApp, CONFIG_FILE  # noqa: F401
 from phyml_ui.tree_viewer import TreeViewerDialog  # noqa: F401
 
-if __name__ == '__main__':
+
+def main():
+    if len(sys.argv) > 1:
+        from phyml_core.cli import main as cli_main
+        sys.exit(cli_main())
     app = QApplication(sys.argv)
     window = PhyMLApp()
     window.show()
     sys.exit(app.exec())
+
+
+if __name__ == '__main__':
+    main()
