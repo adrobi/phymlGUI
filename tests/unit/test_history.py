@@ -154,6 +154,7 @@ def test_new_record_counts_ok_and_n():
     assert rec['params'] == params and rec['files'] == files
     assert rec['ok'] == 2 and rec['n'] == 3 and rec['duration_s'] == 12.5
     json.dumps(rec)                                   # JSON-serialisable as is
+    assert history.display_input(rec) == 'data/'      # one input, other paths in files: a folder
 
 
 def test_new_record_does_not_alias_its_arguments():
@@ -183,16 +184,74 @@ def test_old_record_display_and_tree():
     assert history.best_tree({'input': 'a.fasta', 'tree': None}) == ''
 
 
+def _entry(path, status='ok'):
+    return {'file': path, 'status': status, 'tree': '', 'stats': {}, 'error': ''}
+
+
 def test_new_record_display_input_file_folder_and_batch(tmp_path):
+    # nothing here exists on disk: the label comes from the record alone
     folder = tmp_path / 'Мои данные'
-    folder.mkdir()
     single = str(folder / 'a.fasta')
-    assert history.display_input({'inputs': [single]}) == 'a.fasta'
-    assert history.display_input({'inputs': [str(folder)]}) == 'Мои данные/'
-    assert history.display_input({'inputs': [str(folder) + os.sep]}) == 'Мои данные/'
+    assert history.display_input({'inputs': [single], 'files': [_entry(single)]}) == 'a.fasta'
+    inside = [_entry(str(folder / 'a.fasta')), _entry(str(folder / 'b.fasta'))]
+    assert history.display_input({'inputs': [str(folder)], 'files': inside}) == 'Мои данные/'
+    assert history.display_input({'inputs': [str(folder) + os.sep], 'files': inside}) == 'Мои данные/'
     batch = [str(folder / 'a.fasta'), str(folder / 'b.fasta'), str(folder / 'c.fasta')]
-    assert history.display_input({'inputs': batch}) == 'Мои данные/'
+    assert history.display_input({'inputs': batch, 'files': [_entry(p) for p in batch]}) == 'Мои данные/'
     assert history.display_input({'inputs': []}) == ''
+    assert history.display_input({'inputs': ['']}) == ''
+
+
+def test_single_input_is_a_file_when_its_only_file_entry_is_that_path(tmp_path):
+    single = str(tmp_path / 'a.fasta')
+    assert history.display_input({'inputs': [single], 'files': [_entry(single)]}) == 'a.fasta'
+    # the same path spelled differently (case on Windows, bare file name), or a failed file
+    assert history.display_input({'inputs': [single], 'files': [_entry(os.path.normcase(single))]}) == 'a.fasta'
+    assert history.display_input({'inputs': [single], 'files': [_entry('a.fasta')]}) == 'a.fasta'
+    assert history.display_input({'inputs': [single], 'files': [_entry(single, 'error')]}) == 'a.fasta'
+
+
+def test_single_input_is_a_folder_when_its_file_entries_are_other_paths(tmp_path):
+    folder = str(tmp_path / 'set')
+    files = [_entry(os.path.join(folder, 'a.fasta')), _entry(os.path.join(folder, 'b.fasta'))]
+    assert history.display_input({'inputs': [folder], 'files': files}) == 'set/'
+    assert history.display_input({'inputs': [folder], 'files': files[:1]}) == 'set/'    # one file inside
+    assert history.display_input({'inputs': [folder], 'files': [_entry('a.fasta')]}) == 'set/'
+
+
+def test_single_input_without_file_entries_shows_the_plain_name(tmp_path):
+    # no evidence of a folder: the name is shown as it is
+    path = str(tmp_path / 'set')
+    assert history.display_input({'inputs': [path]}) == 'set'
+    assert history.display_input({'inputs': [path], 'files': []}) == 'set'
+
+
+class _NoFilesystem:
+    """Stands in for the os module inside phyml_core.history: pure path functions work,
+    everything that asks the filesystem fails the test."""
+    _FORBIDDEN = {'isdir', 'isfile', 'exists', 'lexists', 'islink', 'ismount', 'realpath', 'abspath',
+                  'getsize', 'samefile', 'stat', 'lstat', 'listdir', 'scandir', 'getcwd'}
+
+    def __init__(self, real):
+        self._real = real
+
+    def __getattr__(self, name):
+        if name in self._FORBIDDEN:
+            raise AssertionError(f'display_input must not query the filesystem ({name})')
+        return _NoFilesystem(getattr(self._real, name)) if name == 'path' else getattr(self._real, name)
+
+
+def test_display_input_does_not_touch_the_filesystem(tmp_path, monkeypatch):
+    folder = tmp_path / 'set'
+    folder.mkdir()                                    # it exists, yet display_input must not ask
+    files = [_entry(str(folder / 'a.fasta')), _entry(str(folder / 'b.fasta'))]
+    monkeypatch.setattr(history, 'os', _NoFilesystem(os))
+    with pytest.raises(AssertionError):               # the guard itself works
+        history.os.path.isdir(str(folder))
+    assert history.display_input({'inputs': [str(folder)], 'files': files}) == 'set/'
+    assert history.display_input({'inputs': [files[0]['file']], 'files': files[:1]}) == 'a.fasta'
+    assert history.display_input({'inputs': [e['file'] for e in files], 'files': files}) == 'set/'
+    assert history.display_input({'input': 'old.fasta'}) == 'old.fasta'
 
 
 def test_display_input_of_files_without_a_common_folder_falls_back_to_the_first_name():
@@ -229,3 +288,71 @@ def test_err_history_broken_is_localised_with_a_placeholder():
         assert '{}' in STRINGS[lang]['err_history_broken']
     assert STRINGS['en']['err_history_broken'] == '[ERROR] Run history file is damaged and was ignored: {}'
     assert STRINGS['ru']['err_history_broken'] == '[ОШИБКА] Файл истории запусков повреждён и пропущен: {}'
+
+
+def test_load_drops_non_dict_entries_and_keeps_broken_copy(tmp_path):
+    path = tmp_path / 'h.json'
+    valid = {'ts': '2026-01-01 10:00', 'input': 'a.fasta', 'ok': 1, 'n': 1, 'tree': 'x.txt'}
+    raw = json.dumps([1, 'x', None, valid, [2], True]).encode('utf-8')
+    path.write_bytes(raw)
+    errors = []
+    store = HistoryStore(str(path))
+    assert store.load(on_error=errors.append) == [valid]       # the good history is not thrown away
+    assert errors == [_t('err_history_broken').format(str(path))]
+    assert (tmp_path / 'h.json.broken').read_bytes() == raw
+    assert path.read_bytes() == raw                             # load alone does not rewrite the file
+    assert store.get(0) == valid and store.get(1) is None       # indexes follow the cleaned list
+
+
+def test_load_list_without_any_dict_is_empty_and_broken(tmp_path):
+    path = tmp_path / 'h.json'
+    path.write_text('[1, "x"]', 'utf-8')
+    errors = []
+    assert HistoryStore(str(path)).load(errors.append) == []
+    assert len(errors) == 1 and (tmp_path / 'h.json.broken').read_text('utf-8') == '[1, "x"]'
+
+
+def test_load_clean_list_is_not_reported(tmp_path):
+    path = tmp_path / 'h.json'
+    path.write_text('[{"n": 1}, {"n": 2}]', 'utf-8')
+    errors = []
+    assert HistoryStore(str(path)).load(errors.append) == [{'n': 1}, {'n': 2}]
+    assert errors == [] and not (tmp_path / 'h.json.broken').exists()
+
+
+def test_append_after_non_dict_entries_keeps_the_valid_ones_and_the_original_bytes(tmp_path):
+    path = tmp_path / 'h.json'
+    raw = b'[1, {"n": 1}, "x"]'
+    path.write_bytes(raw)
+    store = HistoryStore(str(path))
+    store.append({'n': 2})
+    assert store.load() == [{'n': 2}, {'n': 1}]                 # junk is gone from the live file
+    assert (tmp_path / 'h.json.broken').read_bytes() == raw     # but kept in the copy
+
+
+@pytest.mark.parametrize('rec', [
+    {'files': None}, {'files': [None]}, {'files': 'abc'}, {'files': 7}, {'files': [1, 'x', []]},
+    {'files': {'file': 'a'}}, {'inputs': 'abc'}, {'inputs': None}, {'inputs': 5}, {'inputs': [None, 5]},
+    {'inputs': {'a': 1}}, {'input': None}, {'input': 5}, {'input': ['a']}, {'tree': None}, {'tree': 7},
+    {'files': [{'status': 'ok', 'tree': None}]}, {'files': [{'status': 'ok', 'tree': 3}]},
+    {'files': [{'status': 'ok', 'tree': ['t']}]}, {'files': [{'status': ['ok']}]}, {},
+    {'inputs': ['a.fasta'], 'files': [None, 5, {'file': None}]},
+])
+def test_helpers_tolerate_malformed_records(rec):
+    assert isinstance(history.display_input(rec), str)
+    assert isinstance(history.best_tree(rec), str)
+
+
+def test_malformed_new_style_fields_fall_back_to_the_old_record_keys():
+    rec = {'inputs': 'abc', 'files': None, 'input': 'old.fasta', 'tree': 'x.txt'}
+    assert history.display_input(rec) == 'old.fasta'
+    assert history.best_tree(rec) == 'x.txt'
+    assert history.display_input({'inputs': None, 'input': None}) == ''
+    assert history.best_tree({'files': 'abc', 'tree': None}) == ''
+
+
+def test_malformed_items_inside_lists_are_skipped():
+    rec = {'inputs': [None, 'D:/data/a.fasta', 5],
+           'files': [None, {'status': 'ok', 'tree': 't.txt'}, 'x', 3, {'status': 'error', 'tree': 'bad.txt'}]}
+    assert history.display_input(rec) == 'a.fasta'
+    assert history.best_tree(rec) == 't.txt'
