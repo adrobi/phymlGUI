@@ -17,7 +17,8 @@ import urllib.request
 
 from Bio import SeqIO
 
-RUN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'testrun')
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+RUN = os.path.join(ROOT, 'testrun')
 os.makedirs(RUN, exist_ok=True)
 OUT_DIR = os.path.join(RUN, 'real')
 OUT_FA = os.path.join(OUT_DIR, 'cytb_mammals.fasta')

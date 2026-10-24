@@ -1,20 +1,40 @@
 # phymlGUI test suites
 
-Binary-free checks run under pytest (`pip install -r requirements-dev.txt`):
+All suites run under pytest (`pip install -r requirements-dev.txt`):
 
-    python -m pytest tests/unit tests/gui   # no analysis binaries needed (CI-friendly)
+    python -m pytest -q -rs                # everything; tests without their binary are skipped
+    python -m pytest tests/unit tests/gui  # no analysis binaries needed (CI-friendly)
+    python -m pytest tests/e2e             # real MUSCLE / PhyML / MPI / IQ-TREE runs
+    python -m pytest -m "not slow"         # skip the long real-data scenario
 
-Standalone scripts, runnable on any machine with the Python dependencies:
+Layout:
 
-    python tests/run_tests.py         # end-to-end pipeline, needs local binaries
-    python tests/test_gui_logic.py    # GUI behaviour + live CPU monitoring
-    python tests/test_batch.py        # batch mode + CSV summary + history
-    python tests/test_iqtree.py       # IQ-TREE engine (skips without the binary)
+- `unit/`, `gui/` - fast checks. `gui/` builds `PhyMLApp` under `QT_QPA_PLATFORM=offscreen`.
+- `e2e/` - end-to-end runs of the pipeline, batch mode, CPU monitor and IQ-TREE engine.
+  `e2e/datasets.py` holds the synthetic two-clade dataset (fixture `synthetic`).
+- `data/` - static fixtures (stats files, trees).
+- `conftest.py` - binary lookup, markers, the `isolated_config` fixture and a session guard
+  that fails the run if a test rewrites the real `phyml_config.json` / `phyml_history.json`.
 
-Suites that need local analysis binaries (`phymlgui v1.1/phyml-mpi.exe`,
-`tools/muscle.exe`, Microsoft MPI, optionally `tools/iqtree2/iqtree2.exe`)
-print `SKIP` and exit 0 when the binaries are absent — e.g. on CI.
+## Binaries and markers
 
-Working files and generated datasets live in `testrun/` (gitignored);
-`tests/fetch_real_data.py` downloads and caches real NCBI mitochondrial
-CytB sequences used by the `t9` end-to-end scenario.
+Tests that need an analysis binary carry a marker and are skipped (not failed) when the
+binary is missing, e.g. on CI:
+
+| Marker | Binary | Environment variable | Default locations |
+|---|---|---|---|
+| `needs_phyml` | PhyML (MPI build) | `PHYMLGUI_PHYML` | `bin/phyml-mpi.exe`, `phymlgui v1.1/phyml-mpi.exe` |
+| `needs_mpi` | MS-MPI `mpiexec` | `PHYMLGUI_MPIEXEC` | `bin/mpiexec.exe`, `C:\Program Files\Microsoft MPI\Bin\mpiexec.exe` |
+| `needs_muscle` | MUSCLE | `PHYMLGUI_MUSCLE` | `bin/muscle.exe`, `tools/muscle.exe` |
+| `needs_iqtree` | IQ-TREE 2 | `PHYMLGUI_IQTREE` | `bin/iqtree2.exe`, `tools/iqtree2/iqtree2.exe` |
+
+`PHYMLGUI_RAXML` (RAxML-NG) is looked up the same way for the upcoming engine.
+The environment variable wins over the default locations. `slow` marks long end-to-end
+tests; `-rs` prints the reason for every skip.
+
+## Working files
+
+Tests work in pytest's `tmp_path` and never write to the repository. The one exception
+is the real-data cache `testrun/real/cytb_mammals.fasta` (gitignored): `e2e/fetch_real_data.py`
+downloads mitochondrial CytB sequences from NCBI once for `test_real_cytb_tree`, which is
+skipped when the cache is absent and the network is unreachable.
