@@ -2,22 +2,114 @@ import csv
 import json
 import os
 import shutil
+from html import escape
 
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QFormLayout, QComboBox, QLineEdit, QPushButton,
-                             QTextEdit, QFileDialog, QMessageBox, QTabWidget,
+                             QFileDialog, QMessageBox, QTabWidget,
                              QCheckBox, QGroupBox, QSizePolicy, QLabel,
-                             QStatusBar, QProgressBar)
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QIcon
+                             QStatusBar, QProgressBar, QSplitter, QToolBox,
+                             QListWidget, QListWidgetItem, QTextEdit,
+                             QTableWidget, QTableWidgetItem, QHeaderView)
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence
 
 from phyml_core import __version__
 from phyml_core.i18n import _t
 from phyml_core.utils import psutil, detect_cores, is_mpi_binary, resource_path
 from phyml_core.pipeline import PipelineWorker
-from phyml_ui.tree_viewer import TreeViewerDialog
+from phyml_ui.tree_viewer import TreeViewerWidget
+from phyml_ui.themes import THEMES
 
 CONFIG_FILE = 'phyml_config.json'
+
+_ROLE_COLORS = {
+    'error':   '#E53935',
+    'success': '#43A047',
+    'system':  '#3D8BFD',
+    'out':     None,  # default text color from the active theme
+}
+
+
+class LogConsole(QWidget):
+    """Structured log: colored roles, severity filter, substring search.
+
+    Keeps the QTextEdit-style API used by the pipeline (append/clear) and
+    by tests (toPlainText); entries are always stored in full, filtering
+    only affects what is displayed.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._entries = []  # (role, text)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        bar = QHBoxLayout()
+        self.filter_box = QComboBox()
+        self.filter_box.addItem(_t("log_filter_all"), "all")
+        self.filter_box.addItem(_t("log_filter_error"), "error")
+        self.filter_box.addItem(_t("log_filter_success"), "success")
+        self.filter_box.addItem(_t("log_filter_system"), "system")
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText(_t("log_search"))
+        self.filter_box.currentIndexChanged.connect(self._render)
+        self.search_edit.textChanged.connect(self._render)
+        bar.addWidget(self.filter_box)
+        bar.addWidget(self.search_edit)
+        layout.addLayout(bar)
+
+        self.view = QTextEdit()
+        self.view.setReadOnly(True)
+        self.view.setFont(QFont('Consolas', 9))
+        layout.addWidget(self.view)
+
+    @staticmethod
+    def _classify(text):
+        s = text.strip()
+        if ('[ERROR]' in s or '[ОШИБКА]' in s or '[CRITICAL' in s
+                or '[КРИТИЧ' in s or s.startswith('[!')):
+            return 'error'
+        if s.startswith('[+]') or 'SUCCESSFULLY' in s or 'УСПЕШНО' in s:
+            return 'success'
+        if s.startswith('['):
+            return 'system'
+        return 'out'
+
+    def append(self, text):
+        self._entries.append((self._classify(text), text))
+        if self._passes(*self._entries[-1]):
+            self._append_html(text, self._entries[-1][0])
+
+    def clear(self):
+        self._entries.clear()
+        self.view.clear()
+
+    def toPlainText(self):
+        return '\n'.join(t for _, t in self._entries)
+
+    def _passes(self, role, text):
+        flt = self.filter_box.currentData()
+        if flt != 'all' and role != flt:
+            return False
+        needle = self.search_edit.text().strip().lower()
+        return not needle or needle in text.lower()
+
+    def _append_html(self, text, role):
+        color = _ROLE_COLORS[role]
+        prefix = '' if color is None else f'#{color}'
+        weight = '600' if role == 'system' else '400'
+        self.view.append(f'<span style="color:{prefix or "inherit"};font-weight:{weight}">'
+                         f'{escape(text)}</span>')
+        sb = self.view.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _render(self):
+        self.view.clear()
+        for role, text in self._entries:
+            if self._passes(role, text):
+                self._append_html(text, role)
 
 
 # --- Main Application Window ---
@@ -31,18 +123,59 @@ class PhyMLApp(QWidget):
         self._cpu_samples = []
         self._mon_procs = {}
         self._batch_mode = False
+        self._theme = 'light'
+        self._recent = []
         self.phys_cores, self.logi_cores = detect_cores()
         self.initUI()
         self.load_config()
         self._is_loading = False
 
+    # ---------- UI construction ----------
+
     def initUI(self):
         self.setWindowTitle(f'phymlGUI {__version__}')
         self.setWindowIcon(QIcon(resource_path('icon.png')))
-        self.resize(850, 850)
+        self.resize(1280, 820)
+        self.setMinimumSize(980, 600)  # must stay usable at 1366x768
+        self.setAcceptDrops(True)
 
-        main_layout = QVBoxLayout()
-        main_layout.setSpacing(10)
+        root_layout = QVBoxLayout(self)
+        self.splitter = QSplitter(Qt.Horizontal)
+        root_layout.addWidget(self.splitter, 1)
+
+        self.splitter.addWidget(self._build_left_panel())
+        self.splitter.addWidget(self._build_right_pane())
+        self.splitter.setSizes([230, 1050])
+        self.splitter.setChildrenCollapsible(True)
+
+        QShortcut(QKeySequence(Qt.Key_F9), self, self.toggle_side_panel)
+        self.bind_autosave(self)  # after the whole tree is parented
+
+    def _build_left_panel(self):
+        self.panel = QToolBox()
+        self.panel.setMinimumWidth(180)
+
+        self.recent_list = QListWidget()
+        self.recent_list.itemDoubleClicked.connect(self._open_recent)
+        self.panel.addItem(self.recent_list, _t("panel_recent"))
+
+        self.presets_list = QListWidget()
+        hint = QListWidgetItem(_t("panel_hint_presets"))
+        hint.setFlags(hint.flags() & ~Qt.ItemIsEnabled)
+        self.presets_list.addItem(hint)
+        self.panel.addItem(self.presets_list, _t("panel_presets"))
+
+        self.history_list = QListWidget()
+        hint = QListWidgetItem(_t("panel_hint_history"))
+        hint.setFlags(hint.flags() & ~Qt.ItemIsEnabled)
+        self.history_list.addItem(hint)
+        self.panel.addItem(self.history_list, _t("panel_history"))
+        return self.panel
+
+    def _build_right_pane(self):
+        right = QWidget()
+        main_layout = QVBoxLayout(right)
+        main_layout.setSpacing(8)
 
         # 1. Group: Paths
         group_paths = QGroupBox(_t("group_paths"))
@@ -82,7 +215,6 @@ class PhyMLApp(QWidget):
         self.tabs = QTabWidget()
         self.tabs.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
 
-        # Tab: Basic Parameters (MPI settings added here)
         tab_basic = QWidget()
         form_basic = QFormLayout(tab_basic)
 
@@ -112,7 +244,6 @@ class PhyMLApp(QWidget):
         form_basic.addRow(_t("lbl_boot"), self.le_bootstrap_replicates)
         self.tabs.addTab(tab_basic, _t("tab_model"))
 
-        # Tab: Evolutionary
         tab_model = QWidget()
         form_model = QFormLayout(tab_model)
         self.cb_freq = QComboBox()
@@ -124,7 +255,6 @@ class PhyMLApp(QWidget):
         self.le_gamma = QLineEdit("e"); form_model.addRow(_t("lbl_gamma"), self.le_gamma)
         self.tabs.addTab(tab_model, _t("tab_evo"))
 
-        # Tab: Tree Search
         tab_tree = QWidget()
         form_tree = QFormLayout(tab_tree)
         self.cb_search = QComboBox()
@@ -142,11 +272,11 @@ class PhyMLApp(QWidget):
         # 3. Controls
         control_layout = QHBoxLayout()
         self.btn_run = QPushButton(_t("btn_run"))
-        self.btn_run.setStyleSheet("background-color: #2196F3; color: white; padding: 10px; font-weight: bold;")
+        self.btn_run.setStyleSheet(f"background-color: #2196F3; color: white; padding: 10px; font-weight: bold;")
         self.btn_run.clicked.connect(self.start_pipeline)
 
         self.btn_cancel = QPushButton(_t("btn_cancel"))
-        self.btn_cancel.setStyleSheet("background-color: #F44336; color: white; padding: 10px; font-weight: bold;")
+        self.btn_cancel.setStyleSheet(f"background-color: #F44336; color: white; padding: 10px; font-weight: bold;")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self.cancel_pipeline)
 
@@ -156,16 +286,32 @@ class PhyMLApp(QWidget):
         control_layout.addWidget(self.btn_run); control_layout.addWidget(self.btn_cancel); control_layout.addWidget(self.chk_show_tree)
         main_layout.addLayout(control_layout)
 
-        # 4. Logs
-        group_logs = QGroupBox(_t("group_log"))
-        log_layout = QVBoxLayout()
-        self.log_console = QTextEdit()
-        self.log_console.setReadOnly(True)
-        log_layout.addWidget(self.log_console)
-        group_logs.setLayout(log_layout)
-        main_layout.addWidget(group_logs)
+        # 4. Results tabs: Log | Tree | Stats | Summary
+        self.result_tabs = QTabWidget()
+        self.log_console = LogConsole()
+        self.result_tabs.addTab(self.log_console, _t("tab_log"))
 
-        # 5. Status bar: core info + live CPU utilization
+        self.tree_view = TreeViewerWidget()
+        self.result_tabs.addTab(self.tree_view, _t("tab_tree"))
+
+        stats_tab = QWidget()
+        stats_lay = QVBoxLayout(stats_tab)
+        self.stats_file_label = QLabel("—")
+        self.stats_table = QTableWidget(0, 2)
+        self.stats_table.horizontalHeader().setVisible(False)
+        self.stats_table.verticalHeader().setVisible(False)
+        self.stats_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.stats_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        stats_lay.addWidget(self.stats_file_label)
+        stats_lay.addWidget(self.stats_table)
+        self.result_tabs.addTab(stats_tab, _t("tab_stats"))
+
+        self.summary_table = QTableWidget(0, 8)
+        self.summary_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.result_tabs.addTab(self.summary_table, _t("tab_summary"))
+        main_layout.addWidget(self.result_tabs, 1)
+
+        # 5. Status bar: core info + live CPU utilization + theme toggle
         self.status_bar = QStatusBar()
         self.status_bar.setSizeGripEnabled(False)
         self.cores_label = QLabel(_t("cores_info").format(self.phys_cores, self.logi_cores))
@@ -175,10 +321,15 @@ class PhyMLApp(QWidget):
         self.cpu_sys_bar.setTextVisible(True)
         self.cpu_sys_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.cpu_run_label = QLabel(_t("cpu_analysis_idle"))
+        self.theme_btn = QPushButton("☾")
+        self.theme_btn.setFixedSize(30, 24)
+        self.theme_btn.setToolTip(_t("theme_toggle"))
+        self.theme_btn.clicked.connect(self.toggle_theme)
         self.status_bar.addWidget(self.cores_label)
         self.status_bar.addWidget(self.cpu_sys_label)
         self.status_bar.addWidget(self.cpu_sys_bar, 1)  # stretch: fills all free space
         self.status_bar.addPermanentWidget(self.cpu_run_label)
+        self.status_bar.addPermanentWidget(self.theme_btn)
         main_layout.addWidget(self.status_bar)
 
         self.cpu_timer = QTimer(self)
@@ -187,8 +338,60 @@ class PhyMLApp(QWidget):
         if psutil is not None:
             self.cpu_timer.start()
 
-        self.setLayout(main_layout)
-        self.bind_autosave(self)
+        return right
+
+    # ---------- drag & drop ----------
+
+    def dragEnterEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls:
+            p = urls[0].toLocalFile()
+            if os.path.isdir(p) or p.lower().endswith(('.fasta', '.fas', '.fa')):
+                event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        p = event.mimeData().urls()[0].toLocalFile()
+        self.fasta_path_input.setText(p)
+        self.fasta_file = p
+        event.acceptProposedAction()
+
+    # ---------- panel / theme helpers ----------
+
+    def toggle_side_panel(self):
+        self.panel.setVisible(not self.panel.isVisible())
+
+    def toggle_theme(self):
+        self._theme = 'dark' if self._theme == 'light' else 'light'
+        self.apply_theme(self._theme)
+        if not self._is_loading:
+            self.auto_save()
+
+    def apply_theme(self, name):
+        from PySide6.QtWidgets import QApplication
+        self._theme = name if name in THEMES else 'light'
+        self.theme_btn.setText('☀' if self._theme == 'dark' else '☾')
+        QApplication.instance().setStyleSheet(THEMES[self._theme])
+
+    def _refresh_recent(self):
+        self.recent_list.clear()
+        for p in self._recent:
+            self.recent_list.addItem(os.path.basename(p) + ('/' if os.path.isdir(p) else ''))
+
+    def _remember_recent(self, path):
+        if path in self._recent:
+            self._recent.remove(path)
+        self._recent.insert(0, path)
+        self._recent = self._recent[:10]
+        self._refresh_recent()
+
+    def _open_recent(self, item):
+        row = self.recent_list.row(item)
+        if row < len(self._recent) and os.path.exists(self._recent[row]):
+            p = self._recent[row]
+            self.fasta_path_input.setText(p)
+            self.fasta_file = p
+
+    # ---------- pipeline plumbing ----------
 
     def closeEvent(self, event):
         if self.worker and self.worker.isRunning():
@@ -254,7 +457,9 @@ class PhyMLApp(QWidget):
             "search": self.cb_search.currentData(),
             "optimize": self.cb_optimize.currentData(),
             "parsimony": self.chk_parsimony.isChecked(),
-            "show_tree": self.chk_show_tree.isChecked()
+            "show_tree": self.chk_show_tree.isChecked(),
+            "theme": self._theme,
+            "recent": self._recent
         }
 
     def auto_save(self):
@@ -292,6 +497,9 @@ class PhyMLApp(QWidget):
                 self.le_gamma.setText(config.get("gamma", "e"))
                 self.chk_parsimony.setChecked(config.get("parsimony", False))
                 self.chk_show_tree.setChecked(config.get("show_tree", True))
+                self._recent = [p for p in config.get("recent", []) if os.path.exists(p)]
+                self._refresh_recent()
+                self.apply_theme(config.get("theme", "light"))
                 self.toggle_bootstrap_input()
                 self.log_console.append(_t("sys_load"))
             except Exception as e: self.log_console.append(_t("err_load").format(e))
@@ -319,12 +527,15 @@ class PhyMLApp(QWidget):
                 and self.cb_support_method.currentData() == "bootstrap"):
             QMessageBox.warning(self, _t("mpi_boot_title"), _t("mpi_boot_msg")); return
         self._batch_mode = len(files) > 1
+        self._remember_recent(target)
+        if not self._is_loading: self.auto_save()
         self.btn_run.setEnabled(False); self.btn_cancel.setEnabled(True); self.log_console.clear()
+        self.result_tabs.setCurrentWidget(self.log_console)
         self._cpu_samples = []
         self._mon_procs = {}
         config = self.get_current_config()
         self.worker = PipelineWorker(config, files)
-        self.worker.log_signal.connect(lambda msg: self.log_console.append(msg))
+        self.worker.log_signal.connect(self.log_console.append)
         self.worker.finished_signal.connect(self.pipeline_finished)
         self.worker.start()
 
@@ -339,10 +550,37 @@ class PhyMLApp(QWidget):
         avg = sum(self._cpu_samples) / len(self._cpu_samples) if self._cpu_samples else 0.0
         self.cpu_run_label.setText(_t("cpu_analysis_done").format(int(avg), round(avg / 100, 1)))
         if self.worker is not None and getattr(self.worker, 'results', None):
+            self._populate_stats()
+            self._populate_summary()
             self._save_summary_csv()
-        if success and self.chk_show_tree.isChecked() and not self._batch_mode and os.path.exists(tree_path):
-            self.log_console.append(_t("sys_open_tree"))
-            viewer = TreeViewerDialog(tree_path, self); viewer.exec()
+        if success and tree_path and os.path.exists(tree_path):
+            self.tree_view.load_tree(tree_path)
+            if self.chk_show_tree.isChecked() and not self._batch_mode:
+                self.result_tabs.setCurrentWidget(self.tree_view)
+
+    def _populate_stats(self):
+        rows = [r for r in self.worker.results if r['status'] == 'OK']
+        if not rows:
+            return
+        r = rows[-1]
+        self.stats_file_label.setText(_t("stats_field_file") + ': ' + r['file'])
+        fields = [('stats_field_model', 'model'), ('stats_field_taxa', 'taxa'),
+                  ('stats_field_lnl', 'lnL'), ('stats_field_gamma', 'gamma'),
+                  ('stats_field_tstv', 'tstv'), ('stats_field_time', 'time')]
+        self.stats_table.setRowCount(len(fields))
+        for i, (key, col) in enumerate(fields):
+            self.stats_table.setItem(i, 0, QTableWidgetItem(_t(key)))
+            self.stats_table.setItem(i, 1, QTableWidgetItem(r.get(col) or 'n/a'))
+
+    def _populate_summary(self):
+        cols = ['file', 'status', 'model', 'taxa', 'lnL', 'gamma', 'tstv', 'time']
+        heads = [_t("sum_col_" + c) for c in cols]
+        self.summary_table.setColumnCount(len(cols))
+        self.summary_table.setHorizontalHeaderLabels(heads)
+        self.summary_table.setRowCount(len(self.worker.results))
+        for i, r in enumerate(self.worker.results):
+            for j, c in enumerate(cols):
+                self.summary_table.setItem(i, j, QTableWidgetItem(r.get(c) or ''))
 
     def _save_summary_csv(self):
         """Write per-file results (status, model, lnL, ...) to phymlgui_summary.csv."""

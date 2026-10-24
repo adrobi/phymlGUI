@@ -6,7 +6,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 
-from PySide6.QtWidgets import QVBoxLayout, QDialog
+from PySide6.QtWidgets import QVBoxLayout, QWidget, QDialog
 from PySide6.QtGui import QIcon
 from Bio import Phylo
 
@@ -14,14 +14,10 @@ from phyml_core.i18n import _t
 from phyml_core.utils import resource_path
 
 
-# --- Dialog class for tree visualization ---
-class TreeViewerDialog(QDialog):
-    def __init__(self, tree_path, parent=None):
+# --- Embeddable tree visualization widget ---
+class TreeViewerWidget(QWidget):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(_t("tree_result").format(os.path.basename(tree_path)))
-        self.setWindowIcon(QIcon(resource_path('icon.png')))
-        self.resize(1200, 800)
-
         layout = QVBoxLayout(self)
         self.figure = Figure()
         self.canvas = FigureCanvas(self.figure)
@@ -31,7 +27,12 @@ class TreeViewerDialog(QDialog):
         layout.addWidget(self.canvas)
 
         self.ax = self.figure.add_subplot(111)
+        self.tree_path = ""
 
+    def load_tree(self, tree_path):
+        """(Re)render the tree; on failure shows the error inside the canvas."""
+        self.tree_path = tree_path
+        self.ax.clear()
         try:
             tree = Phylo.read(tree_path, "newick")
             def format_label(node):
@@ -55,3 +56,16 @@ class TreeViewerDialog(QDialog):
             self.ax.text(0.5, 0.5, _t("tree_error").format(e),
                          ha="center", va="center", color="red", fontsize=12)
             self.canvas.draw()
+
+
+# --- Kept for backward compatibility: modal dialog wrapping the widget ---
+class TreeViewerDialog(QDialog):
+    def __init__(self, tree_path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(_t("tree_result").format(os.path.basename(tree_path)))
+        self.setWindowIcon(QIcon(resource_path('icon.png')))
+        self.resize(1200, 800)
+        layout = QVBoxLayout(self)
+        self.viewer = TreeViewerWidget(self)
+        self.viewer.load_tree(tree_path)
+        layout.addWidget(self.viewer)
