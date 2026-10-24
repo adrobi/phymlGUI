@@ -6,18 +6,8 @@ import pytest
 
 from datasets import phyml_config, synthetic  # noqa: F401  (fixture)
 from phyml_core.pipeline import PipelineWorker
-from phyml_ui.main_window import PhyMLApp
 
 pytestmark = [pytest.mark.needs_phyml, pytest.mark.needs_mpi, pytest.mark.needs_muscle]
-
-
-@pytest.fixture
-def window(isolated_config, qtbot):
-    # isolated_config goes first so it is torn down last: qtbot closes the
-    # window at teardown and closeEvent still writes the (patched) config file
-    w = PhyMLApp()
-    qtbot.addWidget(w)
-    return w
 
 
 def test_cpu_samples_during_mpi_run(window, qapp, tmp_path, monkeypatch, binaries, synthetic):

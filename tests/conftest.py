@@ -67,6 +67,30 @@ def isolated_config(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture
+def window(isolated_config, qtbot):
+    """A PhyMLApp on isolated config/history files, closed by qtbot at teardown.
+
+    isolated_config must be listed BEFORE qtbot: fixtures are torn down in
+    reverse order, and closing the window runs closeEvent -> auto_save(), which
+    must still write the patched (tmp_path) config, never the real one.
+    """
+    from phyml_ui.main_window import PhyMLApp
+    w = PhyMLApp()
+    qtbot.addWidget(w)
+    return w
+
+
+@pytest.fixture
+def warned(monkeypatch):
+    """Replace QMessageBox.warning; the returned list collects the call args."""
+    from PySide6.QtWidgets import QMessageBox
+    shown = []
+    monkeypatch.setattr(QMessageBox, 'warning',
+                        staticmethod(lambda *a, **k: shown.append(a) or QMessageBox.Ok))
+    return shown
+
+
 def _digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 

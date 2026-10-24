@@ -7,22 +7,11 @@ from pathlib import Path
 
 import pytest
 from Bio import AlignIO, Phylo
-from PySide6.QtWidgets import QMessageBox
 
 from datasets import synthetic  # noqa: F401  (fixture)
 from phyml_core.pipeline import PipelineWorker
-from phyml_ui.main_window import PhyMLApp
 
 pytestmark = pytest.mark.needs_iqtree
-
-
-@pytest.fixture
-def window(isolated_config, qtbot):
-    # isolated_config goes first so it is torn down last: qtbot closes the
-    # window at teardown and closeEvent still writes the (patched) config file
-    w = PhyMLApp()
-    qtbot.addWidget(w)
-    return w
 
 
 @pytest.fixture
@@ -82,11 +71,8 @@ def test_100_replicates_raised_to_1000(qapp, monkeypatch, binaries, run_dir):
     assert any(' -B 1000' in line for line in logs), 'UFBoot replicates were not raised to 1000'
 
 
-def test_gui_validation_and_run_with_xlsx(window, qtbot, monkeypatch, binaries, run_dir):
+def test_gui_validation_and_run_with_xlsx(window, warned, qtbot, binaries, run_dir):
     """GUI: engine validation, model list, full run + xlsx summary."""
-    warned = []
-    monkeypatch.setattr(QMessageBox, 'warning',
-                        staticmethod(lambda *a, **k: warned.append(a) or QMessageBox.Ok))
     window.engine_setting = 'iqtree'
     window.update_models()
     assert window.cb_model.currentData() == 'MFP'
@@ -137,7 +123,7 @@ def test_every_listed_model_accepted(window, binaries, run_dir):
                 continue  # ModelFinder is exercised by the runs above
             r = subprocess.run([binaries['iqtree'], '-s', str(phy), '-m', m, '-n', '0',
                                 '-T', '1', '-redo', '--prefix', str(run_dir / 'model_probe')],
-                               capture_output=True, text=True)
+                               capture_output=True, text=True, timeout=120)
             if r.returncode != 0:
                 rejected.append(m)
     assert not rejected, f'IQ-TREE rejects listed models: {rejected}'

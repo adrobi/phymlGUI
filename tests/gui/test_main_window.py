@@ -1,29 +1,11 @@
 """GUI behaviour of PhyMLApp that needs no analysis binaries."""
 import pytest
-from PySide6.QtWidgets import QMessageBox, QSizePolicy
+from PySide6.QtWidgets import QSizePolicy
 
 from phyml_core.i18n import _t
 from phyml_core.utils import detect_cores
-from phyml_ui.main_window import PhyMLApp, SettingsDialog
+from phyml_ui.main_window import SettingsDialog
 from phyml_ui.themes import build_qss, resolve
-
-
-@pytest.fixture
-def window(isolated_config, qtbot):
-    # isolated_config goes first so it is torn down last: qtbot closes the
-    # window at teardown and closeEvent still writes the (patched) config file
-    w = PhyMLApp()
-    qtbot.addWidget(w)
-    return w
-
-
-@pytest.fixture
-def warned(monkeypatch):
-    """Replace QMessageBox.warning; the list collects the (parent, title, text) calls."""
-    shown = []
-    monkeypatch.setattr(QMessageBox, 'warning',
-                        staticmethod(lambda *a, **k: shown.append(a) or QMessageBox.Ok))
-    return shown
 
 
 @pytest.fixture
