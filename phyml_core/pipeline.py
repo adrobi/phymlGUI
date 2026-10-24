@@ -32,6 +32,7 @@ def parse_stats(stats_path):
 # --- Background Worker Thread ---
 class PipelineWorker(QThread):
     log_signal = Signal(str)
+    file_status_signal = Signal(str, str)   # (file name, pending|running|ok|fail)
     finished_signal = Signal(bool, str)
 
     def __init__(self, config, fasta_files):
@@ -52,9 +53,15 @@ class PipelineWorker(QThread):
         for i, fasta in enumerate(self.fasta_files, 1):
             if self._is_cancelled:
                 break
+            self.file_status_signal.emit(os.path.basename(fasta), 'pending')
+        for i, fasta in enumerate(self.fasta_files, 1):
+            if self._is_cancelled:
+                break
             if batch:
                 self.log_signal.emit(_t("batch_file_header").format(i, len(self.fasta_files), os.path.basename(fasta)))
+            self.file_status_signal.emit(os.path.basename(fasta), 'running')
             ok, tree, stats = self._process_one(fasta)
+            self.file_status_signal.emit(os.path.basename(fasta), 'ok' if ok else 'fail')
             row = {'file': os.path.basename(fasta), 'status': 'OK' if ok else 'FAIL', 'tree': tree if ok else ''}
             row.update({k: stats.get(k, '') for k in ('model', 'taxa', 'lnL', 'gamma', 'tstv', 'time')})
             self.results.append(row)
