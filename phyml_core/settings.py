@@ -98,14 +98,14 @@ def load(path: str, on_error: Optional[Callable[[str], None]] = None) -> dict:
     return cfg
 
 
-def save(path: str, cfg: dict) -> None:
-    """Write cfg as JSON through a temporary file in the same folder and os.replace.
+def write_json_atomic(path: str, obj, indent: int = 4) -> None:
+    """Write obj as UTF-8 JSON through a temporary file in the same folder and os.replace.
     OSError is passed on to the caller; no temporary file is left behind."""
     directory = os.path.dirname(os.path.abspath(path))
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=os.path.basename(path) + '.', suffix='.tmp')
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
-            json.dump(cfg, f, indent=4, ensure_ascii=False)
+            json.dump(obj, f, indent=indent, ensure_ascii=False)
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -113,6 +113,11 @@ def save(path: str, cfg: dict) -> None:
         except OSError:
             pass
         raise
+
+
+def save(path: str, cfg: dict) -> None:
+    """Write cfg atomically (see write_json_atomic), indented by 4."""
+    write_json_atomic(path, cfg, indent=4)
 
 
 def _is_command_name(value: str) -> bool:

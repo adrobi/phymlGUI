@@ -151,6 +151,22 @@ def test_save_failure_keeps_previous_file(tmp_path):
     assert os.listdir(tmp_path) == ['c.json']
 
 
+def test_write_json_atomic_indent_roundtrip_and_cleanup(tmp_path):
+    path = tmp_path / 'sub' / 'o.json'
+    path.parent.mkdir()
+    settings.write_json_atomic(str(path), {'a': ['б']})
+    assert path.read_text('utf-8') == '{\n    "a": [\n        "б"\n    ]\n}'     # indent 4 by default
+    settings.write_json_atomic(str(path), {'a': ['б']}, indent=2)
+    assert path.read_text('utf-8') == '{\n  "a": [\n    "б"\n  ]\n}'
+    with pytest.raises(TypeError):
+        settings.write_json_atomic(str(path), {'a': object()})
+    assert json.loads(path.read_text('utf-8')) == {'a': ['б']}                   # previous file kept
+    assert os.listdir(path.parent) == ['o.json']                                 # no temp file left
+    with pytest.raises(OSError):
+        settings.write_json_atomic(str(path.parent), [])                         # a directory target
+    assert os.listdir(tmp_path) == ['sub'] and os.listdir(path.parent) == ['o.json']
+
+
 def _paths(tmp_path):
     app = tmp_path / 'Мои программы' / 'phymlGUI'
     (app / 'bin').mkdir(parents=True)
