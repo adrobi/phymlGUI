@@ -7,3 +7,8 @@ phyml_config.json
 phymlgui v1.1/
 tools/
 testrun/
+ROADMAP.md
+release_body.md
+release.json
+release_resp.json
+asset_resp.json
