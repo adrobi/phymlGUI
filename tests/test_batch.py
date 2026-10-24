@@ -80,7 +80,7 @@ try:
     w.le_mpi_np.setText('2')
     run_dir_abs = os.path.abspath(run_dir)
     w.fasta_path_input.setText(run_dir_abs)
-    w.start_pipeline()
+    w.btn_run.click()  # real signal path: clicked(bool) must not break start_pipeline
     guard = 0
     while (not w.btn_run.isEnabled()) and guard < 400:
         app.processEvents(); time.sleep(0.3); guard += 1

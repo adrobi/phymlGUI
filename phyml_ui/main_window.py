@@ -386,7 +386,7 @@ class PhyMLApp(QWidget):
         control_row = QHBoxLayout()
         self.btn_run = QPushButton(_t("btn_run"))
         self.btn_run.setObjectName('btn_run')
-        self.btn_run.clicked.connect(self.start_pipeline)
+        self.btn_run.clicked.connect(lambda: self.start_pipeline())  # clicked(bool) must not leak into files_override
         self.btn_cancel = QPushButton(_t("btn_cancel"))
         self.btn_cancel.setObjectName('btn_cancel')
         self.btn_cancel.setEnabled(False)
@@ -404,7 +404,7 @@ class PhyMLApp(QWidget):
         """Big tree viewer on top, Log/Stats/Summary tabs underneath."""
         right = QWidget()
         v = QVBoxLayout(right)
-        v.setContentsMargins(0, 0, 0, 0)
+        v.setContentsMargins(8, 0, 0, 0)  # breathing room from the left splitter
         self.tree_view = TreeViewerWidget()
 
         self.result_tabs = QTabWidget()
@@ -704,6 +704,8 @@ class PhyMLApp(QWidget):
         if idx >= 0: combo.setCurrentIndex(idx)
 
     def start_pipeline(self, files_override=None):
+        if isinstance(files_override, bool):  # defensive: Qt clicked(checked)
+            files_override = None
         if files_override is None:
             target = self.fasta_path_input.text() or self.fasta_file
             if not target or not os.path.exists(target):
