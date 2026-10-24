@@ -1,6 +1,68 @@
-"""Application QSS themes: light and dark with a shared accent color."""
+"""Application themes: light/dark palettes with a dynamic accent color.
 
-ACCENT = '#1E9E6A'
+Theme can follow the Windows system setting ('system') and the accent can
+either be a fixed preset or the Windows system accent; both are read from
+the registry on Windows and fall back gracefully elsewhere.
+"""
+
+try:
+    import winreg
+except ImportError:  # non-Windows
+    winreg = None
+
+ACCENTS = {
+    'green': '#1E9E6A',
+    'blue': '#2D7DD2',
+    'violet': '#8E6BD8',
+    'orange': '#E08A3C',
+    'red': '#D9534F',
+}
+ACCENT_DEFAULT = 'green'
+
+
+def system_theme():
+    """'light' or 'dark' according to the Windows apps theme."""
+    if winreg is not None:
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                 r'Software\Microsoft\Windows\CurrentVersion\Themes\Personalize')
+            with key:
+                value, _ = winreg.QueryValueEx(key, 'AppsUseLightTheme')
+                return 'dark' if value == 0 else 'light'
+        except OSError:
+            pass
+    return 'light'
+
+
+def system_accent():
+    """Windows system accent as '#RRGGBB', or None if unavailable."""
+    if winreg is not None:
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\DWM')
+            with key:
+                value, _ = winreg.QueryValueEx(key, 'AccentColor')  # 0xAABBGGRR
+                r, g, b = value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF
+                if (r, g, b) != (0, 0, 0):
+                    return f'#{r:02X}{g:02X}{b:02X}'
+        except OSError:
+            pass
+    return None
+
+
+PALETTES = {
+    'light': dict(
+        bg='#FAFAFA', base='#FFFFFF', text='#212121', border='#C9CDD3',
+        button='#E9EBEE', hover='#E0F2EA', group='#FFFFFF', alt='#F3F6F5',
+        muted='#9AA0A6',
+        run_bg='#B7DFC5', run_fg='#1E4620', run_hover='#A3D5B5',
+        cancel_bg='#F1BDBD', cancel_fg='#6E1B1B', cancel_hover='#EBADAD'),
+    'dark': dict(
+        bg='#1E1F22', base='#26282D', text='#E6E8EB', border='#3C4048',
+        button='#33363C', hover='#2C4A3E', group='#232529', alt='#2B2E34',
+        muted='#7C828A',
+        run_bg='#2E5D45', run_fg='#CFF0DD', run_hover='#35684E',
+        cancel_bg='#5D3232', cancel_fg='#F5CFCF', cancel_hover='#6A3A3A'),
+}
 
 _BASE = """
 QWidget {{ background: {bg}; color: {text}; font-size: 13px; }}
@@ -72,22 +134,37 @@ QToolTip {{ background: {base}; color: {text}; border: 1px solid {accent}; }}
 QScrollArea {{ border: none; }}
 """
 
-LIGHT_QSS = _BASE.format(
-    bg='#FAFAFA', base='#FFFFFF', text='#212121', border='#C9CDD3',
-    button='#E9EBEE', hover='#E0F2EA', group='#FFFFFF', alt='#F3F6F5',
-    muted='#9AA0A6', accent=ACCENT,
-    run_bg='#B7DFC5', run_fg='#1E4620', run_hover='#A3D5B5',
-    cancel_bg='#F1BDBD', cancel_fg='#6E1B1B', cancel_hover='#EBADAD')
 
-DARK_QSS = _BASE.format(
-    bg='#1E1F22', base='#26282D', text='#E6E8EB', border='#3C4048',
-    button='#33363C', hover='#2C4A3E', group='#232529', alt='#2B2E34',
-    muted='#7C828A', accent='#37C894',
-    run_bg='#2E5D45', run_fg='#CFF0DD', run_hover='#35684E',
-    cancel_bg='#5D3232', cancel_fg='#F5CFCF', cancel_hover='#6A3A3A')
-
-THEMES = {'light': LIGHT_QSS, 'dark': DARK_QSS}
+def resolve(theme_setting, accent_setting):
+    """Map user settings to a concrete (palette_name, accent_hex)."""
+    theme = system_theme() if theme_setting == 'system' else theme_setting
+    if theme not in PALETTES:
+        theme = 'light'
+    accent = system_accent() if accent_setting == 'system' else None
+    if not accent:
+        accent = ACCENTS.get(accent_setting) or (
+            accent_setting if isinstance(accent_setting, str) and accent_setting.startswith('#')
+            else ACCENTS[ACCENT_DEFAULT])
+    return theme, accent
 
 
-def apply_theme(app, name):
-    app.setStyleSheet(THEMES.get(name, LIGHT_QSS))
+def build_qss(theme, accent):
+    p = dict(PALETTES[theme])
+    p['accent'] = accent
+    return _BASE.format(**p)
+
+
+def role_colors(theme, accent):
+    """Log entry colors for the given palette; 'out' must never stay black."""
+    return {
+        'error': '#E53935',
+        'success': '#43A047',
+        'system': accent,
+        'out': PALETTES[theme]['text'],
+    }
+
+
+def apply_theme(app, theme_setting, accent_setting):
+    theme, accent = resolve(theme_setting, accent_setting)
+    app.setStyleSheet(build_qss(theme, accent))
+    return theme, accent

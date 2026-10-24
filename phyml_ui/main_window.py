@@ -20,16 +20,9 @@ from phyml_core.i18n import _t
 from phyml_core.utils import psutil, detect_cores, is_mpi_binary, resource_path
 from phyml_core.pipeline import PipelineWorker
 from phyml_ui.tree_viewer import TreeViewerWidget
-from phyml_ui.themes import THEMES
+from phyml_ui.themes import resolve, build_qss, role_colors, ACCENTS
 
 CONFIG_FILE = 'phyml_config.json'
-
-_ROLE_COLORS = {
-    'error':   '#E53935',
-    'success': '#43A047',
-    'system':  '#3D8BFD',
-    'out':     None,  # default text color from the active theme
-}
 
 
 class LogConsole(QWidget):
@@ -43,6 +36,8 @@ class LogConsole(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._entries = []  # (role, text)
+        self._role_colors = {'error': '#E53935', 'success': '#43A047',
+                             'system': '#1E9E6A', 'out': '#212121'}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -97,11 +92,14 @@ class LogConsole(QWidget):
         needle = self.search_edit.text().strip().lower()
         return not needle or needle in text.lower()
 
+    def set_role_colors(self, colors):
+        self._role_colors = dict(colors)
+        self._render()
+
     def _append_html(self, text, role):
-        color = _ROLE_COLORS[role]
-        prefix = '' if color is None else f'#{color}'
+        prefix = self._role_colors[role]
         weight = '600' if role == 'system' else '400'
-        self.view.append(f'<span style="color:{prefix or "inherit"};font-weight:{weight}">'
+        self.view.append(f'<span style="color:{prefix};font-weight:{weight}">'
                          f'{escape(text)}</span>')
         sb = self.view.verticalScrollBar()
         sb.setValue(sb.maximum())
@@ -114,7 +112,7 @@ class LogConsole(QWidget):
 
 
 class SettingsDialog(QDialog):
-    """Rarely changed executable paths, kept out of the main window."""
+    """Rarely changed settings: executable paths and appearance."""
 
     FIELDS = ('path_phyml', 'path_mpirun', 'path_muscle')
 
@@ -123,7 +121,10 @@ class SettingsDialog(QDialog):
         self.app_window = app_window
         self.setWindowTitle(_t("settings_title"))
         self.setWindowIcon(QIcon(resource_path('icon.png')))
-        form = QFormLayout(self)
+        self.resize(640, 340)
+        root = QVBoxLayout(self)
+        paths_box = QGroupBox(_t("settings_paths"))
+        form = QFormLayout(paths_box)
         self.edits = []
         inputs = [app_window.phyml_path_input, app_window.mpirun_path_input,
                   app_window.muscle_path_input]
@@ -135,10 +136,30 @@ class SettingsDialog(QDialog):
             wrap = QWidget(); wrap.setLayout(row)
             form.addRow(_t(key), wrap)
             self.edits.append(edit)
+        root.addWidget(paths_box)
+
+        look_box = QGroupBox(_t("settings_appearance"))
+        look = QFormLayout(look_box)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem(_t("theme_system"), "system")
+        self.theme_combo.addItem(_t("theme_light"), "light")
+        self.theme_combo.addItem(_t("theme_dark"), "dark")
+        idx = self.theme_combo.findData(app_window._theme_setting)
+        self.theme_combo.setCurrentIndex(max(idx, 0))
+        self.accent_combo = QComboBox()
+        self.accent_combo.addItem(_t("accent_system"), "system")
+        for key, hexval in ACCENTS.items():
+            self.accent_combo.addItem(_t("accent_" + key), key)
+        idx = self.accent_combo.findData(app_window._accent_setting)
+        self.accent_combo.setCurrentIndex(max(idx, 0))
+        look.addRow(_t("settings_theme"), self.theme_combo)
+        look.addRow(_t("settings_accent"), self.accent_combo)
+        root.addWidget(look_box)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        form.addRow(buttons)
+        root.addWidget(buttons)
 
     def _browse(self, edit):
         path, _ = QFileDialog.getOpenFileName(self, _t("file_exe"))
@@ -151,6 +172,10 @@ class SettingsDialog(QDialog):
                   self.app_window.muscle_path_input]
         for edit, source in zip(self.edits, inputs):
             source.setText(edit.text())  # programmatic: triggers autosave & MPI detect
+        self.app_window.apply_theme(self.theme_combo.currentData(),
+                                    self.accent_combo.currentData())
+        if not self.app_window._is_loading:
+            self.app_window.auto_save()
         super().accept()
 
 
@@ -165,7 +190,8 @@ class PhyMLApp(QWidget):
         self._cpu_samples = []
         self._mon_procs = {}
         self._batch_mode = False
-        self._theme = 'light'
+        self._theme_setting = 'system'
+        self._accent_setting = 'green'
         self._recent = []
         self.phys_cores, self.logi_cores = detect_cores()
         self.initUI()
@@ -187,18 +213,15 @@ class PhyMLApp(QWidget):
         root_layout.addWidget(self.splitter, 1)
         root_layout.addWidget(self._build_status_bar())
 
-        self.splitter.addWidget(self._build_left_panel())
         self.splitter.addWidget(self._build_middle_pane())
         self.splitter.addWidget(self._build_right_pane())
-        self.splitter.setSizes([210, 360, 870])
+        self.splitter.setSizes([340, 1040])
         self.splitter.setChildrenCollapsible(True)
 
-        QShortcut(QKeySequence(Qt.Key_F9), self, self.toggle_side_panel)
         self.bind_autosave(self)  # after the whole tree is parented
 
-    def _build_left_panel(self):
+    def _build_nav_panel(self):
         self.panel = QToolBox()
-        self.panel.setMinimumWidth(180)
 
         self.recent_list = QListWidget()
         self.recent_list.itemDoubleClicked.connect(self._open_recent)
@@ -305,6 +328,11 @@ class PhyMLApp(QWidget):
         scroll.setWidget(plates)
         v.addWidget(scroll, 1)
 
+        # navigation (recent/presets/history) lives at the bottom of the column
+        self._build_nav_panel()
+        self.panel.setMaximumHeight(230)
+        v.addWidget(self.panel)
+
         control_row = QHBoxLayout()
         self.btn_run = QPushButton(_t("btn_run"))
         self.btn_run.setObjectName('btn_run')
@@ -359,6 +387,7 @@ class PhyMLApp(QWidget):
         split.addWidget(self.result_tabs)
         split.setSizes([470, 260])
         split.setChildrenCollapsible(False)
+        self.right_split = split
         v.addWidget(split, 1)
         return right
 
@@ -374,15 +403,17 @@ class PhyMLApp(QWidget):
         self.cpu_run_label = QLabel(_t("cpu_analysis_idle"))
         self.settings_btn = QPushButton(_t("btn_settings"))
         self.settings_btn.clicked.connect(self.open_settings)
-        self.theme_btn = QPushButton(_t("theme_btn_light"))
-        self.theme_btn.setToolTip(_t("theme_toggle"))
-        self.theme_btn.clicked.connect(self.toggle_theme)
         self.status_bar.addWidget(self.cores_label)
         self.status_bar.addWidget(self.cpu_sys_label)
         self.status_bar.addWidget(self.cpu_sys_bar, 1)  # stretch: fills all free space
         self.status_bar.addPermanentWidget(self.settings_btn)
         self.status_bar.addPermanentWidget(self.cpu_run_label)
-        self.status_bar.addPermanentWidget(self.theme_btn)
+
+        self.cpu_timer = QTimer(self)
+        self.cpu_timer.setInterval(1000)
+        self.cpu_timer.timeout.connect(self.update_cpu_status)
+        if psutil is not None:
+            self.cpu_timer.start()
         return self.status_bar
 
     # ---------- drag & drop ----------
@@ -402,23 +433,19 @@ class PhyMLApp(QWidget):
 
     # ---------- panel / theme / settings helpers ----------
 
-    def toggle_side_panel(self):
-        self.panel.setVisible(not self.panel.isVisible())
-
     def open_settings(self):
         SettingsDialog(self, self).exec()
 
-    def toggle_theme(self):
-        self._theme = 'dark' if self._theme == 'light' else 'light'
-        self.apply_theme(self._theme)
-        if not self._is_loading:
-            self.auto_save()
-
-    def apply_theme(self, name):
+    def apply_theme(self, theme_setting=None, accent_setting=None):
+        """Resolve settings (with 'system' support), style the app and the log."""
         from PySide6.QtWidgets import QApplication
-        self._theme = name if name in THEMES else 'light'
-        self.theme_btn.setText(_t("theme_btn_dark") if self._theme == 'dark' else _t("theme_btn_light"))
-        QApplication.instance().setStyleSheet(THEMES[self._theme])
+        if theme_setting is not None:
+            self._theme_setting = theme_setting
+        if accent_setting is not None:
+            self._accent_setting = accent_setting
+        theme, accent = resolve(self._theme_setting, self._accent_setting)
+        QApplication.instance().setStyleSheet(build_qss(theme, accent))
+        self.log_console.set_role_colors(role_colors(theme, accent))
 
     def _refresh_recent(self):
         self.recent_list.clear()
@@ -445,6 +472,7 @@ class PhyMLApp(QWidget):
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
             self.worker.wait()
+        self.auto_save()  # persist window geometry and splitter ratios
         event.accept()
 
     def toggle_bootstrap_input(self):
@@ -502,8 +530,14 @@ class PhyMLApp(QWidget):
             "optimize": self.cb_optimize.currentData(),
             "parsimony": self.chk_parsimony.isChecked(),
             "show_tree": self.chk_show_tree.isChecked(),
-            "theme": self._theme,
-            "recent": self._recent
+            "theme": self._theme_setting,
+            "accent": self._accent_setting,
+            "recent": self._recent,
+            "window": {
+                "w": self.width(), "h": self.height(),
+                "splitter": self.splitter.sizes(),
+                "vsplit": self.right_split.sizes(),
+            }
         }
 
     def auto_save(self):
@@ -543,7 +577,15 @@ class PhyMLApp(QWidget):
                 self.chk_show_tree.setChecked(config.get("show_tree", True))
                 self._recent = [p for p in config.get("recent", []) if os.path.exists(p)]
                 self._refresh_recent()
-                self.apply_theme(config.get("theme", "light"))
+                self.apply_theme(config.get("theme", "system"),
+                                 config.get("accent", "green"))
+                win = config.get("window") or {}
+                if win.get("w") and win.get("h"):
+                    self.resize(min(win["w"], 4096), min(win["h"], 4096))
+                if isinstance(win.get("splitter"), list) and len(win["splitter"]) == 2:
+                    self.splitter.setSizes(win["splitter"])
+                if isinstance(win.get("vsplit"), list) and len(win["vsplit"]) == 2:
+                    self.right_split.setSizes(win["vsplit"])
                 self.toggle_bootstrap_input()
                 self.log_console.append(_t("sys_load"))
             except Exception as e: self.log_console.append(_t("err_load").format(e))
