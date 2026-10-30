@@ -1,4 +1,5 @@
 import gc
+import locale
 
 import pytest
 from Bio import AlignIO
@@ -8,6 +9,14 @@ from Bio.SeqRecord import SeqRecord
 from phyml_core import alignment
 from phyml_core.alignment import AlignmentError
 from phyml_core.i18n import _t
+
+
+@pytest.fixture
+def locale_codec(monkeypatch):
+    """locale_codec('cp1251'): make the preferred (ANSI) encoding the same on every machine."""
+    def use(name):
+        monkeypatch.setattr(locale, 'getpreferredencoding', lambda *args, **kwargs: name)
+    return use
 
 
 def rec(rid, seq):
@@ -32,11 +41,32 @@ def test_read_fasta_empty_raises(tmp_path, content):
     assert str(exc.value) == _t('err_empty')
 
 
-def test_read_fasta_does_not_hide_an_encoding_error(tmp_path):
-    path = tmp_path / 'cp1251.fasta'
+def test_read_fasta_falls_back_to_locale_encoding(tmp_path, locale_codec, recwarn):
+    """An ANSI file (cp1251 headers) still reads, as it did with the locale codec."""
+    locale_codec('cp1251')
+    path = tmp_path / 'ansi.fasta'
+    path.write_bytes('>Волк_1 обыкновенный\nACGT\n>Лиса\nACGA\n'.encode('cp1251'))
+    records = alignment.read_fasta(str(path))
+    assert [r.id for r in records] == ['Волк_1', 'Лиса']
+    assert records[0].description.endswith('обыкновенный')
+    gc.collect()
+    assert [w for w in recwarn if issubclass(w.category, ResourceWarning)] == []
+
+
+def test_read_fasta_prefers_utf8_over_the_locale_encoding(tmp_path, locale_codec):
+    locale_codec('cp1251')
+    path = tmp_path / 'utf8.fasta'
+    path.write_bytes('>Волк\nACGT\n'.encode('utf-8'))
+    assert [r.id for r in alignment.read_fasta(str(path))] == ['Волк']
+
+
+def test_read_fasta_reports_a_file_no_encoding_decodes(tmp_path, locale_codec):
+    locale_codec('ascii')
+    path = tmp_path / 'ansi.fasta'
     path.write_bytes('>Волк\nACGT\n'.encode('cp1251'))
-    with pytest.raises(UnicodeDecodeError):
+    with pytest.raises(AlignmentError) as exc:
         alignment.read_fasta(str(path))
+    assert 'ascii' in str(exc.value) and 'decode' in str(exc.value)
 
 
 def test_read_fasta_closes_the_file_when_it_is_empty(tmp_path, recwarn):
@@ -119,13 +149,27 @@ def test_write_phylip_raises_on_exact_duplicates(tmp_path):
     assert not out.exists()
 
 
-def test_write_phylip_writes_non_ascii_ids_as_utf8(tmp_path):
-    """read_fasta decodes UTF-8, so the PHYLIP file is UTF-8 too, whatever the locale is."""
+def test_write_phylip_uses_locale_encoding(tmp_path, locale_codec):
+    """The bytes are the locale codec's, as with the old conversion; the tree viewer reads them back so."""
+    locale_codec('cp1251')
     out = tmp_path / 'ru.phy'
     alignment.write_phylip([rec('Волк обыкновенный', 'ACGT'), rec('Лиса', 'ACGA')], str(out))
-    with open(out, encoding='utf-8') as fh:
+    raw = out.read_bytes()
+    assert 'Волк_обыкновенный'.encode('cp1251') in raw
+    assert 'Лиса'.encode('cp1251') in raw
+    assert 'Лиса'.encode('utf-8') not in raw
+    with open(out, encoding='cp1251') as fh:
         back = AlignIO.read(fh, 'phylip-relaxed')
     assert [r.id for r in back] == ['Волк_обыкновенный', 'Лиса']
+
+
+def test_write_phylip_reports_an_id_the_locale_encoding_cannot_hold(tmp_path, locale_codec):
+    locale_codec('cp1251')
+    out = tmp_path / 'bad.phy'
+    with pytest.raises(AlignmentError) as exc:
+        alignment.write_phylip([rec('café', 'ACGT'), rec('B', 'ACGA')], str(out))
+    assert 'encode' in str(exc.value)
+    assert not out.exists()
 
 
 def test_summarize(tmp_path):
