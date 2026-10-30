@@ -140,6 +140,38 @@ def test_failed_migration_is_logged_and_start_continues(data_dir, make_window, m
     assert w.cb_model.currentData() == 'HKY85'
 
 
+def test_failed_migration_blocks_autosave_and_retries_next_start(data_dir, make_window, monkeypatch):
+    """Defaults must not close the migration gate: with no config in data_dir yet, the next
+    start has to find the legacy files still to be copied."""
+    legacy = Path.cwd() / 'phyml_config.json'
+    legacy.write_text(json.dumps({'model': 'GTR'}), encoding='utf-8')
+    target = data_dir / 'phyml_config.json'
+    with monkeypatch.context() as broken:
+        broken.setattr(main_window.settings, 'migrate_legacy',
+                       raising(PermissionError(13, 'copy denied')))
+        w = make_window()
+        assert w.cb_model.currentData() == 'HKY85'
+        w.set_combo_by_data(w.cb_model, 'JC69')
+        w.auto_save()
+        w.close()
+    assert not target.exists(), 'defaults were written over the config that was to be migrated'
+
+    second = make_window()
+    assert second.cb_model.currentData() == 'GTR'
+    assert _t('settings_migrated').format(str(legacy), str(target)) in log_text(second)
+    assert read_json(target)['model'] == 'GTR'
+
+
+def test_failed_migration_keeps_autosave_when_the_config_exists(data_dir, make_window, monkeypatch):
+    """The gate is already closed by a real config: nothing to protect, saving goes on."""
+    (data_dir / 'phyml_config.json').write_text('{"model": "GTR"}', encoding='utf-8')
+    monkeypatch.setattr(main_window.settings, 'migrate_legacy',
+                        raising(PermissionError(13, 'copy denied')))
+    w = make_window()
+    w.set_combo_by_data(w.cb_model, 'JC69')
+    assert read_json(data_dir / 'phyml_config.json')['model'] == 'JC69'
+
+
 # ---------- loading ----------
 
 def test_missing_config_gives_defaults_without_load_message(window):

@@ -660,6 +660,10 @@ class PhyMLApp(QWidget):
             copied = settings.migrate_legacy(self.paths, cwd)
         except OSError as e:
             self._log(_t('err_load').format(e))
+            if not os.path.exists(self.paths.config_file):
+                # Saving the defaults now would create the config that closes the migration
+                # gate, and the legacy settings would never be copied.
+                self._autosave_blocked = True
             return
         for name in copied:
             self._log(_t('settings_migrated').format(
