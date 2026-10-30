@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence
 
-from phyml_core import __version__, presets, settings
+from phyml_core import __version__, alignment, presets, settings
 from phyml_core.engines import ENGINES
 from phyml_core.history import HistoryStore, best_tree, display_input, new_record
 from phyml_core.i18n import _t
@@ -562,18 +562,9 @@ class PhyMLApp(QWidget):
                         and not f.lower().endswith('_aligned.fasta'))
                 self.fasta_info_label.setText(_t('fasta_info').format(n, '—', '—', '—'))
                 return
-            from Bio import SeqIO
-            lengths = [len(r.seq) for r in SeqIO.parse(path, 'fasta')]
-            if not lengths:
-                self.fasta_info_label.setText(' ')
-                return
-            gaps = 0
-            total = sum(lengths)
-            for r in SeqIO.parse(path, 'fasta'):
-                gaps += str(r.seq).count('-')
-            pct = round(gaps / total * 100, 1) if total else 0
-            self.fasta_info_label.setText(
-                _t('fasta_info').format(len(lengths), min(lengths), max(lengths), pct))
+            info = alignment.summarize(path)  # an empty or broken file raises: no label
+            self.fasta_info_label.setText(_t('fasta_info').format(
+                info['n'], info['min_len'], info['max_len'], info['gap_pct']))
         except Exception:
             self.fasta_info_label.setText(' ')
 

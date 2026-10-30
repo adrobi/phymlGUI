@@ -144,3 +144,19 @@ def test_unknown_engine_in_the_settings_shows_the_phyml_models(window):
     window.engine_setting = 'no-such-engine'
     window.update_models()
     assert [window.cb_model.itemData(i) for i in range(window.cb_model.count())] == ENGINES['phyml'].models('nt')
+
+
+def test_fasta_info_label_summarizes_the_alignment(window, tmp_path):
+    fasta = tmp_path / 'выравнивание 1.fasta'
+    fasta.write_text('>A\nACGT--\n>B\nAC\n>C\nACGTA\n', encoding='utf-8')
+    window.fasta_path_input.setText(str(fasta))
+    assert window.fasta_info_label.text() == _t('fasta_info').format(3, 2, 6, 15.4)
+
+
+def test_fasta_info_label_is_blank_for_an_empty_file_and_counts_a_folder(window, tmp_path):
+    empty = tmp_path / 'empty.fasta'
+    empty.write_text('')
+    window.fasta_path_input.setText(str(empty))
+    assert window.fasta_info_label.text() == ' '
+    window.fasta_path_input.setText(str(tmp_path))
+    assert window.fasta_info_label.text() == _t('fasta_info').format(1, '—', '—', '—')
