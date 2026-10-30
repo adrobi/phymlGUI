@@ -1,4 +1,4 @@
-"""End-to-end tests for PipelineWorker with real MUSCLE + phyml-mpi.
+"""End-to-end tests for PipelineRunner with real MUSCLE + phyml-mpi.
 
 Runs the production pipeline on synthetic data with a known topology: two
 clades A=(A1..A4), B=(B1..B4). After each run we check the output files and
@@ -18,7 +18,8 @@ import pytest
 from Bio import Phylo
 
 from datasets import phyml_config, synthetic  # noqa: F401  (fixture)
-from phyml_core.pipeline import PipelineWorker
+from phyml_core.paths import AppPaths
+from phyml_core.runner import PipelineRunner
 
 pytestmark = [pytest.mark.needs_phyml, pytest.mark.needs_muscle]
 
@@ -31,10 +32,12 @@ def run_pipeline(tmp_path, monkeypatch, source, folder, config):
     shutil.copy(source, fasta)
     monkeypatch.chdir(wd)
     logs = []
-    worker = PipelineWorker(config, str(fasta))
-    worker.log_signal.connect(logs.append)
-    worker.finished_signal.connect(lambda ok, tree: logs.append(f'__FINISHED__{ok}|{tree}'))
-    worker.run()  # run synchronously in this thread
+    paths = AppPaths(app_dir=str(tmp_path / 'app'), data_dir=str(tmp_path / 'data'))
+    runner = PipelineRunner(config, str(fasta), paths,
+                            on_log=lambda level, text: logs.append(text))
+    result = runner.run()  # synchronous, in this thread
+    tree = result.files[0].tree if result.files else ''
+    logs.append(f'__FINISHED__{result.success}|{tree}')
     return wd, logs
 
 

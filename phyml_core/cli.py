@@ -8,8 +8,6 @@ import json
 import os
 import sys
 
-from PySide6.QtCore import QCoreApplication
-
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='phymlgui', description='phymlGUI headless pipeline')
@@ -22,8 +20,9 @@ def main(argv=None):
     if not args.file and not args.batch:
         parser.error('specify --file or --batch')
 
-    from phyml_core.pipeline import PipelineWorker
     from phyml_core.i18n import _t
+    from phyml_core.paths import AppPaths
+    from phyml_core.runner import PipelineRunner
 
     config = {}
     if os.path.exists(args.config):
@@ -40,17 +39,15 @@ def main(argv=None):
     else:
         files = [args.file]
 
-    app = QCoreApplication.instance() or QCoreApplication([])
-    worker = PipelineWorker(config, files)
-    worker.log_signal.connect(print)
-    result = {}
-    worker.finished_signal.connect(lambda ok, tree: result.update(ok=ok, tree=tree))
-    worker.run()  # synchronous, no event loop needed
+    runner = PipelineRunner(config, files, AppPaths.detect(),
+                            on_log=lambda level, text: print(text))
+    result = runner.run()  # synchronous, never raises
+    trees = [f.tree for f in result.files if f.status == 'ok' and f.tree]
 
-    print('OK' if result.get('ok') else 'FAILED')
-    if result.get('tree'):
-        print('tree:', result['tree'])
-    return 0 if result.get('ok') else 1
+    print('OK' if result.success else 'FAILED')
+    if trees:
+        print('tree:', trees[-1])
+    return 0 if result.success else 1
 
 
 if __name__ == '__main__':

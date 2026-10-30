@@ -2,7 +2,6 @@
 import json
 import os
 import shutil
-import types
 from pathlib import Path
 
 import pytest
@@ -13,6 +12,7 @@ from phyml_core import presets
 from phyml_core.history import HistoryStore, display_input, new_record
 from phyml_core.i18n import _t
 from phyml_core.paths import AppPaths
+from phyml_core.runner import STAT_KEYS, FileResult, RunResult
 from phyml_core.utils import detect_cores
 
 
@@ -25,18 +25,18 @@ def log_text(window):
     return window.log_console.toPlainText()
 
 
-def stub_worker(files, rows, **extra):
-    """What _append_history reads from a finished PipelineWorker. isRunning and active_process
-    are there for closeEvent and the CPU timer, which keep asking the worker."""
-    return types.SimpleNamespace(fasta_files=list(files), results=list(rows),
-                                 isRunning=lambda: False, active_process=None, **extra)
+def file_result(path, status='ok', tree='', **stats):
+    """A FileResult as PipelineRunner makes it: every stats key present."""
+    full = {key: '' for key in STAT_KEYS}
+    full.update(stats)
+    return FileResult(path, status, tree=tree, stats=full)
 
 
-def worker_row(path, status='OK', tree='', **stats):
-    row = {'file': os.path.basename(path), 'status': status, 'tree': tree,
-           'model': '', 'taxa': '', 'lnL': '', 'gamma': '', 'tstv': '', 'time': ''}
-    row.update(stats)
-    return row
+def finish_run(window, inputs, *files, config=None):
+    """What start_pipeline records about a run, then the history entry for its result."""
+    window._run_inputs = list(inputs)
+    window._run_config = config if config is not None else window.get_current_config()
+    window._append_history(RunResult(list(files), cancelled=False))
 
 
 def raising(exc):
@@ -62,8 +62,7 @@ def test_window_uses_detected_paths_by_default(window, data_dir):
 
 
 def test_history_written_to_data_dir(window, data_dir):
-    window.worker = stub_worker(['x.fasta'], [worker_row('x.fasta', tree='x.txt')])
-    window._append_history(1, 1, 'x.txt')
+    finish_run(window, ['x.fasta'], file_result('x.fasta', tree='x.txt'))
     records = HistoryStore(window.paths.history_file).load()
     assert records[0]['ok'] == 1
     assert (data_dir / 'phyml_history.json').is_file()
@@ -259,13 +258,11 @@ def test_history_record_holds_params_and_full_file_paths(window, tmp_path):
     folder = tmp_path / 'run folder'
     files = [str(folder / 'a.fasta'), str(folder / 'б.fasta')]
     trees = [str(folder / 'a.phy_phyml_tree.txt'), '']
-    window.fasta_path_input.setText(str(folder))
     window.set_combo_by_data(window.cb_model, 'GTR')
-    window.worker = stub_worker(files, [
-        worker_row(files[0], 'OK', trees[0], model='GTR', taxa='8', lnL='-123.4',
-                   gamma='0.5', tstv='2.1', time='3s'),
-        worker_row(files[1], 'FAIL')])
-    window._append_history(1, 2, trees[0])
+    finish_run(window, [str(folder)],
+               file_result(files[0], 'ok', trees[0], model='GTR', taxa='8', lnL='-123.4',
+                           gamma='0.5', tstv='2.1', time='3s'),
+               file_result(files[1], 'fail'))
 
     rec = HistoryStore(window.paths.history_file).load()[0]
     assert rec['inputs'] == [str(folder)]
@@ -290,16 +287,13 @@ def test_history_params_come_from_the_run_config(window):
     window.set_combo_by_data(window.cb_model, 'GTR')
     config = window.get_current_config()
     window.set_combo_by_data(window.cb_model, 'JC69')
-    window.worker = stub_worker(['x.fasta'], [worker_row('x.fasta')], config=config)
-    window._append_history(1, 1, '')
+    finish_run(window, ['x.fasta'], file_result('x.fasta'), config=config)
     assert HistoryStore(window.paths.history_file).load()[0]['params']['model'] == 'GTR'
 
 
 def test_single_file_run_is_listed_by_its_name(window, tmp_path):
     fasta = str(tmp_path / 'one.fasta')
-    window.fasta_path_input.setText(fasta)
-    window.worker = stub_worker([fasta], [worker_row(fasta, tree='t.txt')])
-    window._append_history(1, 1, 't.txt')
+    finish_run(window, [fasta], file_result(fasta, tree='t.txt'))
     rec = HistoryStore(window.paths.history_file).load()[0]
     assert display_input(rec) == 'one.fasta'
     assert window.history_list.item(0).text() == _t('hist_entry').format(rec['ts'], 'one.fasta', 1, 1)
@@ -334,8 +328,7 @@ def test_history_list_shows_old_and_new_records_and_opens_the_best_tree(window, 
 
 def test_history_write_error_is_logged_without_crash(window, monkeypatch):
     monkeypatch.setattr(HistoryStore, 'append', raising(OSError('disk full')))
-    window.worker = stub_worker(['x.fasta'], [worker_row('x.fasta')])
-    window._append_history(1, 1, '')
+    finish_run(window, ['x.fasta'], file_result('x.fasta'))
     assert 'disk full' in log_text(window)
     assert _t('err_settings_save').split('{}')[0] in log_text(window)
 
@@ -345,8 +338,7 @@ def test_unreadable_history_is_logged_without_crash(data_dir, make_window, monke
     w = make_window()
     assert 'history locked' in log_text(w)
     assert w.history_list.count() == 0
-    w.worker = stub_worker(['x.fasta'], [worker_row('x.fasta')])
-    w._append_history(1, 1, '')   # must not raise either
+    finish_run(w, ['x.fasta'], file_result('x.fasta'))   # must not raise either
     assert not (data_dir / 'phyml_history.json').exists()
 
 

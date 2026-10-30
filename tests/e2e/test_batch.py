@@ -6,7 +6,8 @@ from Bio import Phylo
 
 from datasets import phyml_config, synthetic  # noqa: F401  (fixture)
 from phyml_core.history import HistoryStore
-from phyml_core.pipeline import PipelineWorker
+from phyml_core.paths import AppPaths
+from phyml_core.runner import PipelineRunner
 
 pytestmark = [pytest.mark.needs_phyml, pytest.mark.needs_mpi, pytest.mark.needs_muscle]
 
@@ -41,21 +42,16 @@ def gui_batch(window, warned, qtbot, binaries, batch_dir, synthetic):
     return window, batch_dir
 
 
-def test_two_file_batch(qapp, qtbot, binaries, batch_dir):
-    """Batch of two files through the real worker (MPI + bootstrap)."""
+def test_two_file_batch(tmp_path, binaries, batch_dir):
+    """Batch of two files through the real runner (MPI + bootstrap)."""
     files = [str(batch_dir / 'batchA.fasta'), str(batch_dir / 'batchB.fasta')]
-    done, logs = [], []
-    worker = PipelineWorker(phyml_config(binaries), files)
-    worker.log_signal.connect(logs.append)
-    worker.finished_signal.connect(lambda ok, tree: done.append((ok, tree)))
-    worker.start()
-    try:
-        qtbot.waitUntil(lambda: bool(done), timeout=180_000)
-    finally:
-        worker.cancel()
-        worker.wait()
+    logs = []
+    paths = AppPaths(app_dir=str(tmp_path / 'app'), data_dir=str(tmp_path / 'data'))
+    runner = PipelineRunner(phyml_config(binaries), files, paths,
+                            on_log=lambda level, text: logs.append(text))
+    result = runner.run()
 
-    assert done[0][0], 'batch failed:\n' + '\n'.join(logs[-10:])
+    assert result.success, 'batch failed:\n' + '\n'.join(logs[-10:])
     assert any('===' in line for line in logs), 'per-file headers missing'
     assert any('2/2' in line for line in logs), 'batch summary missing'
     assert (batch_dir / 'batchA_aligned.fasta').exists(), 'batchA not aligned'

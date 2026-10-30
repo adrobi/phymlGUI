@@ -54,7 +54,7 @@ def synthetic(tmp_path):
 
 
 def phyml_config(binaries, **overrides):
-    """PipelineWorker config for a small PhyML run (MPI x2, HKY85, 20 bootstraps)."""
+    """PipelineRunner params for a small PhyML run (MPI x2, HKY85, 20 bootstraps)."""
     config = {
         'phyml_path': binaries['phyml'], 'muscle_path': binaries['muscle'],
         'mpirun_path': binaries['mpiexec'], 'mpi_np': '2', 'use_mpi': True,

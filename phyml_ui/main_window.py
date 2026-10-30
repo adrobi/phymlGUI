@@ -1,7 +1,7 @@
 import copy
-import csv
 import os
 import shutil
+from dataclasses import asdict
 from datetime import datetime
 from html import escape
 
@@ -17,28 +17,30 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence
 
-from phyml_core import __version__, alignment, presets, settings
+from phyml_core import __version__, alignment, presets, report, settings
 from phyml_core.engines import ENGINES
+from phyml_core.engines.base import format_issue
 from phyml_core.history import HistoryStore, best_tree, display_input, new_record
 from phyml_core.i18n import _t
 from phyml_core.paths import AppPaths
 from phyml_core.utils import psutil, detect_cores, is_mpi_binary, resource_path
-from phyml_core.pipeline import PipelineWorker
 from phyml_ui.tree_viewer import TreeViewerWidget
 from phyml_ui.themes import resolve, build_qss, role_colors, ACCENTS, PALETTES
+from phyml_ui.worker import RunWorker
 
-# per-file values of a worker row that go into the history
-_STAT_KEYS = ('model', 'taxa', 'lnL', 'gamma', 'tstv', 'time')
+# queue marker per file status of the runner
+_STATUS_MARKERS = {'pending': '…', 'running': '▶', 'ok': '✓', 'fail': '✗',
+                   'cancelled': '⊘'}
 # settings that say nothing about how a run was made: left out of a history record
 _NOT_RUN_PARAMS = ('presets', 'recent', 'window')
 
 
 class LogConsole(QWidget):
-    """Structured log: colored roles, severity filter, substring search.
+    """Structured log: colored levels, severity filter, substring search.
 
-    Keeps the QTextEdit-style API used by the pipeline (append/clear) and
-    by tests (toPlainText); entries are always stored in full, filtering
-    only affects what is displayed.
+    Every entry carries a level from phyml_core.runner.LEVELS ('error', 'success',
+    'system', 'out'), given by whoever writes it. Entries are always stored in full;
+    filtering only affects what is displayed.
     """
 
     def __init__(self, parent=None):
@@ -69,22 +71,13 @@ class LogConsole(QWidget):
         self.view.setFont(QFont('Consolas', 9))
         layout.addWidget(self.view)
 
-    @staticmethod
-    def _classify(text):
-        s = text.strip()
-        if ('[ERROR]' in s or '[ОШИБКА]' in s or '[CRITICAL' in s
-                or '[КРИТИЧ' in s or s.startswith('[!')):
-            return 'error'
-        if s.startswith('[+]') or 'SUCCESSFULLY' in s or 'УСПЕШНО' in s:
-            return 'success'
-        if s.startswith('['):
-            return 'system'
-        return 'out'
-
-    def append(self, text):
-        self._entries.append((self._classify(text), text))
-        if self._passes(*self._entries[-1]):
-            self._append_html(text, self._entries[-1][0])
+    def append(self, level: str, text: str) -> None:
+        """Add an entry; a level this console has no color for is shown as 'out'."""
+        if level not in self._role_colors:
+            level = 'out'
+        self._entries.append((level, text))
+        if self._passes(level, text):
+            self._append_html(text, level)
 
     def clear(self):
         self._entries.clear()
@@ -210,9 +203,10 @@ class SettingsDialog(QDialog):
 
 # --- Main Application Window ---
 class PhyMLApp(QWidget):
-    def __init__(self, paths=None):
+    def __init__(self, paths=None, engines=None):
         super().__init__()
         self.paths = paths if paths is not None else AppPaths.detect()
+        self.engines = ENGINES if engines is None else engines   # tests pass fakes
         self.history_store = HistoryStore(self.paths.history_file)
         self._is_loading = True
         self._autosave_blocked = False  # set when the settings file could not be read
@@ -232,7 +226,11 @@ class PhyMLApp(QWidget):
         self._user_presets = {}
         self._failed_files = []
         self._run_started = None
+        self._run_config = None         # the config the current/last run was started with
+        self._run_inputs = []           # what that run was asked to process (history 'inputs')
+        self._run_out_dir = None        # where its summary goes
         self._last_out_dir = None
+        self.last_result = None         # RunResult of the last finished run
         self.phys_cores, self.logi_cores = detect_cores()
         self.initUI()
         self.load_config()
@@ -544,8 +542,8 @@ class PhyMLApp(QWidget):
 
     def update_models(self):
         self.cb_model.clear()
-        # an unknown engine in a hand-edited config gets PhyML's list, as the pipeline runs PhyML for it
-        engine = ENGINES.get(self.engine_setting, ENGINES['phyml'])
+        # an unknown engine in a hand-edited config gets PhyML's list, as a run uses PhyML for it
+        engine = self.engines.get(self.engine_setting) or ENGINES['phyml']
         for m in engine.models(self.cb_datatype.currentData()):
             self.cb_model.addItem(m, m)
         if not self._is_loading: self.auto_save()
@@ -623,9 +621,9 @@ class PhyMLApp(QWidget):
             }
         }
 
-    def _log(self, text):
-        """A system line for the log; messages from the core modules may end with a newline."""
-        self.log_console.append(text.rstrip('\n'))
+    def _log(self, level, text):
+        """A log line at the given level; messages from the core modules may end with a newline."""
+        self.log_console.append(level, text.rstrip('\n'))
 
     def auto_save(self):
         if self._autosave_blocked:
@@ -638,7 +636,7 @@ class PhyMLApp(QWidget):
             self._save_failed = False
         except OSError as e:
             if not self._save_failed:   # every field change saves: report a failure once
-                self._log(_t('err_settings_save').format(e))
+                self._log('error', _t('err_settings_save').format(e))
             self._save_failed = True
 
     def _migrate_legacy_files(self):
@@ -647,14 +645,14 @@ class PhyMLApp(QWidget):
             cwd = os.getcwd()
             copied = settings.migrate_legacy(self.paths, cwd)
         except OSError as e:
-            self._log(_t('err_load').format(e))
+            self._log('error', _t('err_load').format(e))
             if not os.path.exists(self.paths.config_file):
                 # Saving the defaults now would create the config that closes the migration
                 # gate, and the legacy settings would never be copied.
                 self._autosave_blocked = True
             return
         for name in copied:
-            self._log(_t('settings_migrated').format(
+            self._log('system', _t('settings_migrated').format(
                 os.path.join(cwd, name), os.path.join(self.paths.data_dir, name)))
 
     def load_config(self):
@@ -670,14 +668,14 @@ class PhyMLApp(QWidget):
             problems.append(_t('err_load').format(e))
             raw = copy.deepcopy(settings.DEFAULTS)
         for message in problems:
-            self._log(message)
+            self._log('error', message)
         self._extra_settings = {k: v for k, v in raw.items() if k not in settings.DEFAULTS}
         try:
             self._apply_config(settings.from_disk(raw, self.paths))
             if not problems and os.path.isfile(self.paths.config_file):
-                self._log(_t("sys_load"))
+                self._log('system', _t("sys_load"))
         except Exception as e:
-            self._log(_t("err_load").format(e))
+            self._log('error', _t("err_load").format(e))
         # lists must be populated even without a config file
         self._refresh_presets()
         self._refresh_history()
@@ -744,19 +742,29 @@ class PhyMLApp(QWidget):
                 if not files:
                     QMessageBox.warning(self, _t("err_box_title"), _t("batch_empty")); return
                 files = [os.path.join(target, f) for f in files]
+                out_dir = target
             else:
                 files = [target]
+                out_dir = os.path.dirname(os.path.abspath(target))
+            inputs = [target]
         else:
             files = list(files_override)
-        if self.engine_setting == 'iqtree':
-            if not self.iqtree_path_input.text() or not os.path.exists(self.iqtree_path_input.text()):
-                QMessageBox.warning(self, _t("err_box_title"), _t("err_iqtree")); return
-        elif (is_mpi_binary(self.phyml_path_input.text())
-                and not self.chk_use_mpi.isChecked()
-                and self.cb_support_method.currentData() == "bootstrap"):
-            QMessageBox.warning(self, _t("mpi_boot_title"), _t("mpi_boot_msg")); return
+            if not files:
+                return
+            target = os.path.dirname(files[0])
+            out_dir = os.path.dirname(os.path.abspath(files[0]))
+            inputs = list(files)
+        config = self.get_current_config()
+        if config.get('engine') not in self.engines:
+            config['engine'] = 'phyml'   # a hand-edited unknown engine: PhyML, as its model list
+        errors = [issue for issue in self.engines[config['engine']].validate(config, self.paths)
+                  if issue.level == 'error']
+        if errors:
+            QMessageBox.warning(self, _t('err_box_title'),
+                                '\n'.join(format_issue(issue) for issue in errors))
+            return
         self._batch_mode = len(files) > 1
-        self._remember_recent(target if files_override is None else os.path.dirname(files[0]))
+        self._remember_recent(target)
         if not self._is_loading: self.auto_save()
         self.btn_run.setEnabled(False); self.btn_cancel.setEnabled(True); self.log_console.clear()
         self.result_tabs.setCurrentWidget(self.log_console)
@@ -766,42 +774,52 @@ class PhyMLApp(QWidget):
         self._cpu_samples = []
         self._mon_procs = {}
         self._run_started = datetime.now()
-        config = self.get_current_config()
-        self.worker = PipelineWorker(config, files)
-        self.worker.log_signal.connect(self.log_console.append)
-        self.worker.file_status_signal.connect(self._on_file_status)
-        self.worker.finished_signal.connect(self.pipeline_finished)
+        self._run_config = config
+        self._run_inputs = inputs
+        self._run_out_dir = out_dir
+        self.worker = RunWorker.for_run(config, files, self.paths, engines=self.engines)
+        self.worker.log.connect(self._log)
+        self.worker.status.connect(self._on_file_status)
+        self.worker.done.connect(self.pipeline_finished)
         self.worker.start()
 
     def cancel_pipeline(self):
         if self.worker and self.worker.isRunning():
-            self.worker.cancel()
+            self.worker.cancel()   # returns at once; the kill runs on its own thread
             self.btn_cancel.setEnabled(False)
-            self.log_console.append(_t("sys_interrupt"))
+            self._log('error', _t("sys_interrupt"))
 
-    def pipeline_finished(self, success, tree_path):
+    def pipeline_finished(self, result):
+        """Show a finished run (a RunResult): tables, summary files, history, retry, tree."""
+        self.last_result = result
         self.btn_run.setEnabled(True); self.btn_cancel.setEnabled(False)
         avg = sum(self._cpu_samples) / len(self._cpu_samples) if self._cpu_samples else 0.0
         self.cpu_run_label.setText(_t("cpu_analysis_done").format(int(avg), round(avg / 100, 1)))
-        if self.worker is not None and getattr(self.worker, 'results', None):
-            self._populate_stats()
-            self._populate_summary()
-            self._save_summary_csv()
-        n_ok = sum(1 for r in getattr(self.worker, 'results', []) if r['status'] == 'OK')
-        n_all = len(getattr(self.worker, 'results', []))
-        self._append_history(n_ok, n_all, tree_path)
-        self._failed_files = [f for f, r in zip(getattr(self.worker, 'fasta_files', []),
-                                                getattr(self.worker, 'results', []))
-                              if r.get('status') == 'FAIL']
+        if result.files:
+            rows = report.summary_rows(result.files)
+            self._populate_stats(result)
+            self._populate_summary(rows)
+            self._write_summary(rows)
+        self._append_history(result)
+        self._failed_files = [f.file for f in result.files if f.status == 'fail']
         self.retry_btn.setVisible(bool(self._failed_files))
-        target = self.fasta_path_input.text() or self.fasta_file
-        if target and os.path.isdir(target):
-            self._last_out_dir = target
-        elif getattr(self.worker, 'fasta_files', None):
-            self._last_out_dir = os.path.dirname(os.path.abspath(self.worker.fasta_files[0]))
+        self._last_out_dir = self._run_out_dir
         self.open_dir_btn.setEnabled(self._last_out_dir is not None)
-        if success and tree_path and os.path.exists(tree_path) and self.chk_show_tree.isChecked():
-            self.tree_view.load_tree(tree_path)
+        if result.success and self.chk_show_tree.isChecked():
+            tree = result.files[-1].tree
+            if tree and os.path.exists(tree):
+                self.tree_view.load_tree(tree)
+
+    def _write_summary(self, rows):
+        """phymlgui_summary.csv (and .xlsx) next to the inputs; a failure is only logged."""
+        try:
+            written = report.write_summary(rows, self._run_out_dir)
+        except Exception as e:   # OSError, and whatever openpyxl raises after the CSV
+            self._log('error', _t("err_summary_save").format(e))
+            return
+        for path in written:
+            key = 'xlsx_saved' if path.lower().endswith('.xlsx') else 'summary_saved'
+            self._log('success', _t(key).format(path))
 
     # ---------- queue ----------
 
@@ -811,7 +829,7 @@ class PhyMLApp(QWidget):
             self.queue_list.addItem(os.path.basename(f) + '  …')
 
     def _on_file_status(self, name, status):
-        marker = {'pending': '…', 'running': '▶', 'ok': '✓', 'fail': '✗'}.get(status, '?')
+        marker = _STATUS_MARKERS.get(status, '?')
         for i in range(self.queue_list.count()):
             item = self.queue_list.item(i)
             if item.text().split('  ')[0] == name:
@@ -828,43 +846,30 @@ class PhyMLApp(QWidget):
 
     # ---------- history ----------
 
-    def _append_history(self, n_ok, n_all, tree_path):
-        """Add the finished run to the history, as the worker's rows describe it.
-
-        The counts and the best tree follow from those rows, so n_ok, n_all and tree_path
-        only keep the signature of the call.
-        """
-        worker = self.worker
-        fasta_files = list(getattr(worker, 'fasta_files', None) or [])
-        rows = list(getattr(worker, 'results', None) or [])
-        config = getattr(worker, 'config', None)   # what the run used, not what the form shows now
-        if not isinstance(config, dict):
-            config = self.get_current_config()
+    def _append_history(self, result):
+        """Add a finished run (a RunResult) to the history: one entry per file, with the
+        config the run was started with, not what the form shows now."""
+        config = self._run_config if isinstance(self._run_config, dict) else self.get_current_config()
         params = {k: v for k, v in config.items() if k not in _NOT_RUN_PARAMS}
-        files = [{'file': path,
-                  'status': 'ok' if row.get('status') == 'OK' else 'fail',
-                  'tree': row.get('tree', ''),
-                  'stats': {k: row.get(k, '') for k in _STAT_KEYS},
-                  'error': row.get('error', '')}
-                 for path, row in zip(fasta_files, rows)]
-        target = self.fasta_path_input.text() or self.fasta_file or (fasta_files[0] if fasta_files else '')
         duration = (datetime.now() - self._run_started).total_seconds() if self._run_started else 0.0
-        rec = new_record(inputs=[target] if target else [],
+        rec = new_record(inputs=self._run_inputs,
                          engine=params.get('engine') or self.engine_setting,
-                         params=params, files=files, duration_s=duration)
+                         params=params, files=[asdict(f) for f in result.files],
+                         duration_s=duration)
         try:
             self.history_store.append(rec)
         except OSError as e:
-            self._log(_t('err_settings_save').format(e))
+            self._log('error', _t('err_settings_save').format(e))
         self._refresh_history()
 
     def _refresh_history(self):
         self.history_list.clear()
         try:
-            self._history_records = self.history_store.load(on_error=self._log)[:50]
+            self._history_records = self.history_store.load(
+                on_error=lambda message: self._log('error', message))[:50]
         except OSError as e:
             self._history_records = []
-            self._log(_t('err_load').format(e))
+            self._log('error', _t('err_load').format(e))
         for rec in self._history_records:
             self.history_list.addItem(_t('hist_entry').format(
                 rec.get('ts', ''), display_input(rec), rec.get('ok', 0), rec.get('n', 0)))
@@ -877,7 +882,7 @@ class PhyMLApp(QWidget):
         if tree and os.path.exists(tree):
             self.tree_view.load_tree(tree)
         else:
-            self.log_console.append(_t('hist_no_tree'))
+            self._log('error', _t('hist_no_tree'))
 
     # ---------- presets ----------
 
@@ -903,7 +908,7 @@ class PhyMLApp(QWidget):
         kind, key = data
         preset = presets.BUILTIN[key] if kind == 'builtin' else self._user_presets.get(key, {})
         self._apply_preset(preset)
-        self.log_console.append(_t('preset_applied').format(item.text()))
+        self._log('success', _t('preset_applied').format(item.text()))
 
     def _apply_preset(self, preset):
         params = presets.apply(preset, self.get_current_config())
@@ -924,7 +929,7 @@ class PhyMLApp(QWidget):
         self._user_presets[name] = presets.extract(self.get_current_config())
         self.auto_save()
         self._refresh_presets()
-        self.log_console.append(_t('preset_saved').format(name))
+        self._log('success', _t('preset_saved').format(name))
 
     def _preset_menu(self, pos):
         item = self.presets_list.itemAt(pos)
@@ -940,62 +945,30 @@ class PhyMLApp(QWidget):
             self.auto_save()
             self._refresh_presets()
 
-    def _populate_stats(self):
-        rows = [r for r in self.worker.results if r['status'] == 'OK']
-        if not rows:
+    def _populate_stats(self, result):
+        """The statistics of the last file that finished 'ok'."""
+        done = [f for f in result.files if f.status == 'ok']
+        if not done:
             return
-        r = rows[-1]
-        self.stats_file_label.setText(_t("stats_field_file") + ': ' + r['file'])
+        last = done[-1]
+        self.stats_file_label.setText(_t("stats_field_file") + ': ' + os.path.basename(last.file))
         fields = [('stats_field_model', 'model'), ('stats_field_taxa', 'taxa'),
                   ('stats_field_lnl', 'lnL'), ('stats_field_gamma', 'gamma'),
                   ('stats_field_tstv', 'tstv'), ('stats_field_time', 'time')]
         self.stats_table.setRowCount(len(fields))
         for i, (key, col) in enumerate(fields):
             self.stats_table.setItem(i, 0, QTableWidgetItem(_t(key)))
-            self.stats_table.setItem(i, 1, QTableWidgetItem(r.get(col) or 'n/a'))
+            self.stats_table.setItem(i, 1, QTableWidgetItem((last.stats or {}).get(col) or 'n/a'))
 
-    def _populate_summary(self):
+    def _populate_summary(self, rows):
         cols = ['file', 'status', 'model', 'taxa', 'lnL', 'gamma', 'tstv', 'time']
         heads = [_t("sum_col_" + c) for c in cols]
         self.summary_table.setColumnCount(len(cols))
         self.summary_table.setHorizontalHeaderLabels(heads)
-        self.summary_table.setRowCount(len(self.worker.results))
-        for i, r in enumerate(self.worker.results):
+        self.summary_table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
             for j, c in enumerate(cols):
                 self.summary_table.setItem(i, j, QTableWidgetItem(r.get(c) or ''))
-
-    def _save_summary_csv(self):
-        """Write per-file results (status, model, lnL, ...) to phymlgui_summary.csv."""
-        target = self.fasta_path_input.text() or self.fasta_file
-        out_dir = target if os.path.isdir(target) else os.path.dirname(os.path.abspath(target))
-        out_path = os.path.join(out_dir, 'phymlgui_summary.csv')
-        fields = ['file', 'status', 'model', 'taxa', 'lnL', 'gamma', 'tstv', 'time', 'tree']
-        try:
-            with open(out_path, 'w', newline='', encoding='utf-8-sig') as f:
-                wr = csv.DictWriter(f, fieldnames=fields, delimiter=';', extrasaction='ignore')
-                wr.writeheader()
-                wr.writerows(self.worker.results)
-            self.log_console.append(_t("summary_saved").format(out_path))
-        except OSError as e:
-            self.log_console.append(_t("err_summary_save").format(e))
-        # optional Excel workbook with the same data (needs openpyxl)
-        try:
-            from openpyxl import Workbook
-            wb = Workbook()
-            ws = wb.active
-            ws.title = 'Summary'
-            ws.append([_t("sum_col_" + c) for c in fields[:-1]])
-            for r in self.worker.results:
-                ws.append([r.get(c) or '' for c in fields[:-1]])
-            for col, width in zip('ABCDEFGHI', (28, 8, 16, 8, 12, 10, 10, 12)):
-                ws.column_dimensions[col].width = width
-            xlsx_path = out_path[:-4] + '.xlsx'
-            wb.save(xlsx_path)
-            self.log_console.append(_t("xlsx_saved").format(xlsx_path))
-        except ImportError:
-            pass
-        except Exception as e:
-            self.log_console.append(_t("err_summary_save").format(e))
 
     def on_phyml_path_changed(self, path):
         if is_mpi_binary(path):
@@ -1003,7 +976,7 @@ class PhyMLApp(QWidget):
                 self._mpi_auto_path = path
                 self.chk_use_mpi.setChecked(True)
                 if not self._is_loading:
-                    self.log_console.append(_t("mpi_detected"))
+                    self._log('system', _t("mpi_detected"))
         else:
             self._mpi_auto_path = ""
 
@@ -1013,12 +986,11 @@ class PhyMLApp(QWidget):
         sys_pct = psutil.cpu_percent(interval=None)
         self.cpu_sys_bar.setValue(int(sys_pct))
         self.cpu_sys_label.setText(_t("cpu_sys").format(int(sys_pct)))
-        proc = self.worker.active_process if self.worker is not None else None
-        if (self.worker is not None and self.worker.isRunning()
-                and proc is not None and proc.poll() is None):
+        pid = self.worker.active_pid if self.worker is not None else None
+        if pid is not None and self.worker.isRunning():
             try:
-                root = psutil.Process(proc.pid)
-                pids = {proc.pid} | {c.pid for c in root.children(recursive=True)}
+                root = psutil.Process(pid)
+                pids = {pid} | {c.pid for c in root.children(recursive=True)}
             except psutil.Error:
                 return
             # cpu_percent() keeps per-call state inside each Process object,

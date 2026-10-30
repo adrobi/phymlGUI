@@ -5,7 +5,8 @@ import time
 import pytest
 
 from datasets import phyml_config, synthetic  # noqa: F401  (fixture)
-from phyml_core.pipeline import PipelineWorker
+from phyml_core.runner import PipelineRunner
+from phyml_ui.worker import RunWorker
 
 pytestmark = [pytest.mark.needs_phyml, pytest.mark.needs_mpi, pytest.mark.needs_muscle]
 
@@ -18,11 +19,12 @@ def test_cpu_samples_during_mpi_run(window, qapp, tmp_path, monkeypatch, binarie
     monkeypatch.chdir(run_dir)
 
     window._cpu_samples = []
-    worker = PipelineWorker(phyml_config(binaries), str(fasta))
-    window.worker = worker
     done, wlogs = [], []
-    worker.log_signal.connect(wlogs.append)
-    worker.finished_signal.connect(lambda ok, tree: done.append((ok, tree)))
+    runner = PipelineRunner(phyml_config(binaries), str(fasta), window.paths,
+                            on_log=lambda level, text: wlogs.append(text))
+    worker = RunWorker(runner)   # the window's CPU monitor asks a RunWorker for active_pid
+    window.worker = worker
+    worker.done.connect(lambda result: done.append((result.success, result)))
     worker.start()
     ticks = 0
     while not done and ticks < 300:

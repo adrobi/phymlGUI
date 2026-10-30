@@ -10,7 +10,8 @@ from Bio import AlignIO, Phylo
 
 from datasets import synthetic  # noqa: F401  (fixture)
 from phyml_core.engines import ENGINES
-from phyml_core.pipeline import PipelineWorker
+from phyml_core.paths import AppPaths
+from phyml_core.runner import PipelineRunner
 
 pytestmark = pytest.mark.needs_iqtree
 
@@ -37,26 +38,27 @@ def iqtree_config(binaries, **overrides):
 
 
 def run_worker(config, fasta):
-    """Run the worker synchronously; returns (worker, logs, finished results)."""
-    logs, done = [], []
-    worker = PipelineWorker(config, str(fasta))
-    worker.log_signal.connect(logs.append)
-    worker.finished_signal.connect(lambda ok, tree: done.append((ok, tree)))
-    worker.run()
-    return worker, logs, done
+    """Run the pipeline synchronously; returns (RunResult, logs, [(success, tree)])."""
+    logs = []
+    folder = Path(fasta).parent
+    paths = AppPaths(app_dir=str(folder / 'app'), data_dir=str(folder / 'data'))
+    runner = PipelineRunner(config, str(fasta), paths,
+                            on_log=lambda level, text: logs.append(text))
+    result = runner.run()
+    return result, logs, [(result.success, result.files[0].tree)]
 
 
 def test_mfp_ufboot_run(qapp, monkeypatch, binaries, run_dir):
     """Worker-level: ModelFinder + ultrafast bootstrap on pre-aligned synthetic data."""
     monkeypatch.chdir(run_dir)
-    worker, logs, done = run_worker(iqtree_config(binaries), run_dir / 'test_prealigned.fasta')
+    result, logs, done = run_worker(iqtree_config(binaries), run_dir / 'test_prealigned.fasta')
 
     assert done[0][0], 'iqtree pipeline failed:\n' + '\n'.join(logs[-8:])
     tree_path = done[0][1]
     assert Path(tree_path).exists(), tree_path
     tree = Phylo.read(tree_path, 'newick')
     assert len(tree.get_terminals()) == 8
-    row = worker.results[0]
+    row = result.files[0].stats
     assert row['model'] and row['model'] != 'n/a', row
     iq_report = (run_dir / 'test_prealigned_iqtree.iqtree').read_text(encoding='utf-8')
     lnl_file = re.search(r'Log-likelihood of the tree:\s*(-?[\d.]+)', iq_report).group(1)
@@ -88,7 +90,7 @@ def test_gui_validation_and_run_with_xlsx(window, warned, qtbot, binaries, run_d
     window.start_pipeline()
     qtbot.waitUntil(lambda: window.btn_run.isEnabled(), timeout=180_000)
     window.worker.wait()
-    assert window.worker.results[0]['status'] == 'OK', \
+    assert window.last_result.files[0].status == 'ok', \
         'GUI iqtree run failed:\n' + window.log_console.toPlainText()[-800:]
     xlsx = run_dir / 'phymlgui_summary.xlsx'
     assert xlsx.exists(), 'xlsx summary missing'
