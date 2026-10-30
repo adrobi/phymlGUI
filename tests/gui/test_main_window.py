@@ -8,7 +8,7 @@ from phyml_core.history import HistoryStore
 from phyml_core.i18n import _t
 from phyml_core.report import CSV_NAME
 from phyml_core.utils import detect_cores
-from phyml_ui.main_window import SettingsDialog
+from phyml_ui.settings_dialog import SettingsDialog
 from phyml_ui.themes import build_qss, resolve
 from unit.fakes import FakeEngine
 
@@ -28,7 +28,7 @@ def test_defaults_match_detected_cores(window):
     phys, logi = detect_cores()
     assert window.le_mpi_np.text() == str(window.phys_cores), window.le_mpi_np.text()
     assert (window.phys_cores, window.logi_cores) == (phys, logi)
-    assert str(phys) in window.cores_label.text() and str(logi) in window.cores_label.text()
+    assert str(phys) in window.status.cores_label.text() and str(logi) in window.status.cores_label.text()
 
 
 def test_mpi_binary_autodetect(window, tmp_path):
@@ -68,7 +68,7 @@ def test_theme_tabs_presets_log_filter_recent(window, qapp, tmp_path, restore_st
     assert qapp.styleSheet() == build_qss(theme, accent)
     assert window.log_console._role_colors['out'] == '#E6E8EB', 'phyml output must be themed'
     assert window.log_console._role_colors['system'] == '#2D7DD2', 'system lines use accent'
-    assert window.cpu_timer.isActive(), 'CPU monitor timer must be running'
+    assert window.status.cpu_timer.isActive(), 'CPU monitor timer must be running'
     window.apply_theme('system', 'system')
     assert window.result_tabs.count() == 4, 'expected 4 result tabs (log/stats/summary/queue)'
 
@@ -124,7 +124,7 @@ def test_theme_tabs_presets_log_filter_recent(window, qapp, tmp_path, restore_st
 
 def test_cpu_bar_expands(window):
     """The CPU bar fills the free status bar space."""
-    assert window.cpu_sys_bar.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
+    assert window.status.cpu_sys_bar.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding
 
 
 def test_empty_folder_blocked(window, warned, tmp_path):
@@ -242,7 +242,7 @@ def test_successful_run_fills_results_history_and_tree(window, qtbot, tmp_path, 
     assert csv_path.is_file()
     assert _t('summary_saved').format(str(csv_path)) in window.log_console.toPlainText()
     assert window.retry_btn.isHidden() and window._failed_files == []
-    assert window.open_dir_btn.isEnabled()
+    assert window.status.open_dir_btn.isEnabled()
     rec = HistoryStore(window.paths.history_file).load()[0]
     assert rec['engine'] == 'fake' and rec['inputs'] == [fasta]
     assert rec['files'][0]['file'] == fasta and rec['files'][0]['tree'] == tree

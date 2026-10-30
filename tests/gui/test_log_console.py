@@ -1,4 +1,4 @@
-from phyml_ui.main_window import LogConsole
+from phyml_ui.log_console import LogConsole
 
 
 def test_plain_text_keeps_every_entry(qtbot):

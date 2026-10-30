@@ -83,5 +83,5 @@ def test_queue_history_open_folder(gui_batch):
     records = HistoryStore(window.paths.history_file).load()
     assert records and records[0]['n'] == 2 and records[0]['ok'] == 2
     assert window.history_list.count() >= 1
-    assert window.open_dir_btn.isEnabled()
+    assert window.status.open_dir_btn.isEnabled()
     assert not window.retry_btn.isVisible() or not window._failed_files

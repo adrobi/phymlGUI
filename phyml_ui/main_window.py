@@ -3,19 +3,16 @@ import os
 import shutil
 from dataclasses import asdict
 from datetime import datetime
-from html import escape
 
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                              QFormLayout, QComboBox, QLineEdit, QPushButton,
                              QFileDialog, QMessageBox, QTabWidget,
-                             QCheckBox, QGroupBox, QSizePolicy, QLabel,
-                             QStatusBar, QProgressBar, QSplitter, QToolBox,
+                             QCheckBox, QGroupBox, QLabel, QSplitter, QToolBox,
                              QToolButton, QListWidget, QListWidgetItem,
-                             QTextEdit, QTableWidget, QTableWidgetItem,
-                             QHeaderView, QScrollArea, QDialog,
-                             QDialogButtonBox, QMenu, QInputDialog)
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence
+                             QTableWidget, QTableWidgetItem,
+                             QHeaderView, QScrollArea, QMenu, QInputDialog)
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon, QShortcut, QKeySequence
 
 from phyml_core import __version__, alignment, presets, report, settings
 from phyml_core.engines import ENGINES
@@ -23,9 +20,12 @@ from phyml_core.engines.base import format_issue
 from phyml_core.history import HistoryStore, best_tree, display_input, new_record
 from phyml_core.i18n import _t
 from phyml_core.paths import AppPaths
-from phyml_core.utils import psutil, detect_cores, is_mpi_binary, resource_path
+from phyml_core.utils import detect_cores, is_mpi_binary, resource_path
 from phyml_ui.tree_viewer import TreeViewerWidget
-from phyml_ui.themes import resolve, build_qss, role_colors, ACCENTS, PALETTES
+from phyml_ui.themes import resolve, build_qss, role_colors, PALETTES
+from phyml_ui.log_console import LogConsole
+from phyml_ui.settings_dialog import SettingsDialog
+from phyml_ui.status_bar import AppStatusBar
 from phyml_ui.worker import RunWorker
 
 # queue marker per file status of the runner
@@ -33,172 +33,6 @@ _STATUS_MARKERS = {'pending': '…', 'running': '▶', 'ok': '✓', 'fail': '✗
                    'cancelled': '⊘'}
 # settings that say nothing about how a run was made: left out of a history record
 _NOT_RUN_PARAMS = ('presets', 'recent', 'window')
-
-
-class LogConsole(QWidget):
-    """Structured log: colored levels, severity filter, substring search.
-
-    Every entry carries a level from phyml_core.runner.LEVELS ('error', 'success',
-    'system', 'out'), given by whoever writes it. Entries are always stored in full;
-    filtering only affects what is displayed.
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._entries = []  # (role, text)
-        self._role_colors = {'error': '#E53935', 'success': '#43A047',
-                             'system': '#1E9E6A', 'out': '#212121'}
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
-        bar = QHBoxLayout()
-        self.filter_box = QComboBox()
-        self.filter_box.addItem(_t("log_filter_all"), "all")
-        self.filter_box.addItem(_t("log_filter_error"), "error")
-        self.filter_box.addItem(_t("log_filter_success"), "success")
-        self.filter_box.addItem(_t("log_filter_system"), "system")
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText(_t("log_search"))
-        self.filter_box.currentIndexChanged.connect(self._render)
-        self.search_edit.textChanged.connect(self._render)
-        bar.addWidget(self.filter_box)
-        bar.addWidget(self.search_edit)
-        layout.addLayout(bar)
-
-        self.view = QTextEdit()
-        self.view.setReadOnly(True)
-        self.view.setFont(QFont('Consolas', 9))
-        layout.addWidget(self.view)
-
-    def append(self, level: str, text: str) -> None:
-        """Add an entry; a level this console has no color for is shown as 'out'."""
-        if level not in self._role_colors:
-            level = 'out'
-        self._entries.append((level, text))
-        if self._passes(level, text):
-            self._append_html(text, level)
-
-    def clear(self):
-        self._entries.clear()
-        self.view.clear()
-
-    def toPlainText(self):
-        return '\n'.join(t for _, t in self._entries)
-
-    def _passes(self, role, text):
-        flt = self.filter_box.currentData()
-        if flt != 'all' and role != flt:
-            return False
-        needle = self.search_edit.text().strip().lower()
-        return not needle or needle in text.lower()
-
-    def set_role_colors(self, colors):
-        self._role_colors = dict(colors)
-        self._render()
-
-    def _append_html(self, text, role):
-        prefix = self._role_colors[role]
-        weight = '600' if role == 'system' else '400'
-        self.view.append(f'<span style="color:{prefix};font-weight:{weight}">'
-                         f'{escape(text)}</span>')
-        sb = self.view.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-    def _render(self):
-        self.view.clear()
-        for role, text in self._entries:
-            if self._passes(role, text):
-                self._append_html(text, role)
-
-
-class SettingsDialog(QDialog):
-    """Rarely changed settings: executable paths and appearance."""
-
-    FIELDS = ('path_phyml', 'path_mpirun', 'path_muscle')
-
-    def __init__(self, app_window, parent=None):
-        super().__init__(parent)
-        self.app_window = app_window
-        self.setWindowTitle(_t("settings_title"))
-        self.setWindowIcon(QIcon(resource_path('icon.png')))
-        self.resize(640, 340)
-        root = QVBoxLayout(self)
-        engine_box = QGroupBox(_t("settings_engine_box"))
-        eform = QFormLayout(engine_box)
-        self.engine_combo = QComboBox()
-        self.engine_combo.addItem(_t("engine_phyml"), "phyml")
-        self.engine_combo.addItem(_t("engine_iqtree"), "iqtree")
-        idx = self.engine_combo.findData(app_window.engine_setting)
-        self.engine_combo.setCurrentIndex(max(idx, 0))
-        eform.addRow(_t("settings_engine"), self.engine_combo)
-        self.iqtree_edit = QLineEdit(app_window.iqtree_path_input.text())
-        iq_btn = QPushButton(_t("btn_browse"))
-        iq_btn.clicked.connect(lambda: self._browse(self.iqtree_edit))
-        irow = QHBoxLayout(); irow.addWidget(self.iqtree_edit); irow.addWidget(iq_btn)
-        iwrap = QWidget(); iwrap.setLayout(irow)
-        eform.addRow(_t("path_iqtree"), iwrap)
-        root.addWidget(engine_box)
-
-        paths_box = QGroupBox(_t("settings_paths"))
-        form = QFormLayout(paths_box)
-        self.edits = []
-        inputs = [app_window.phyml_path_input, app_window.mpirun_path_input,
-                  app_window.muscle_path_input]
-        for key, source in zip(self.FIELDS, inputs):
-            edit = QLineEdit(source.text())
-            btn = QPushButton(_t("btn_browse"))
-            btn.clicked.connect(lambda _=False, e=edit: self._browse(e))
-            row = QHBoxLayout(); row.addWidget(edit); row.addWidget(btn)
-            wrap = QWidget(); wrap.setLayout(row)
-            form.addRow(_t(key), wrap)
-            self.edits.append(edit)
-        root.addWidget(paths_box)
-
-        look_box = QGroupBox(_t("settings_appearance"))
-        look = QFormLayout(look_box)
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItem(_t("theme_system"), "system")
-        self.theme_combo.addItem(_t("theme_light"), "light")
-        self.theme_combo.addItem(_t("theme_dark"), "dark")
-        idx = self.theme_combo.findData(app_window._theme_setting)
-        self.theme_combo.setCurrentIndex(max(idx, 0))
-        self.accent_combo = QComboBox()
-        self.accent_combo.addItem(_t("accent_system"), "system")
-        for key, hexval in ACCENTS.items():
-            self.accent_combo.addItem(_t("accent_" + key), key)
-        idx = self.accent_combo.findData(app_window._accent_setting)
-        self.accent_combo.setCurrentIndex(max(idx, 0))
-        look.addRow(_t("settings_theme"), self.theme_combo)
-        look.addRow(_t("settings_accent"), self.accent_combo)
-        root.addWidget(look_box)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
-
-    def _browse(self, edit):
-        path, _ = QFileDialog.getOpenFileName(self, _t("file_exe"))
-        if path:
-            edit.setText(path)
-
-    def accept(self):
-        inputs = [self.app_window.phyml_path_input,
-                  self.app_window.mpirun_path_input,
-                  self.app_window.muscle_path_input]
-        for edit, source in zip(self.edits, inputs):
-            source.setText(edit.text())  # programmatic: triggers autosave & MPI detect
-        self.app_window.iqtree_path_input.setText(self.iqtree_edit.text())
-        engine = self.engine_combo.currentData()
-        if engine != self.app_window.engine_setting:
-            self.app_window.engine_setting = engine
-            self.app_window.update_models()
-        self.app_window.apply_theme(self.theme_combo.currentData(),
-                                    self.accent_combo.currentData())
-        if not self.app_window._is_loading:
-            self.app_window.auto_save()
-        super().accept()
 
 
 # --- Main Application Window ---
@@ -216,8 +50,6 @@ class PhyMLApp(QWidget):
         self.worker = None
         self.fasta_file = ""
         self._mpi_auto_path = ""
-        self._cpu_samples = []
-        self._mon_procs = {}
         self._batch_mode = False
         self._theme_setting = 'system'
         self._accent_setting = 'green'
@@ -249,7 +81,10 @@ class PhyMLApp(QWidget):
         root_layout.setContentsMargins(6, 6, 6, 6)
         self.splitter = QSplitter(Qt.Horizontal)
         root_layout.addWidget(self.splitter, 1)
-        root_layout.addWidget(self._build_status_bar())
+        self.status = AppStatusBar(self.phys_cores, self.logi_cores)
+        self.status.open_dir_clicked.connect(self._open_output_dir)
+        self.status.settings_clicked.connect(self.open_settings)
+        root_layout.addWidget(self.status)
 
         self.splitter.addWidget(self._build_middle_pane())
         self.splitter.addWidget(self._build_right_pane())
@@ -443,36 +278,6 @@ class PhyMLApp(QWidget):
         self.right_split = split
         v.addWidget(split, 1)
         return right
-
-    def _build_status_bar(self):
-        self.status_bar = QStatusBar()
-        self.status_bar.setSizeGripEnabled(False)
-        self.cores_label = QLabel(_t("cores_info").format(self.phys_cores, self.logi_cores))
-        self.cpu_sys_label = QLabel(_t("cpu_sys").format(0))
-        self.cpu_sys_bar = QProgressBar()
-        self.cpu_sys_bar.setRange(0, 100)
-        self.cpu_sys_bar.setTextVisible(True)
-        self.cpu_sys_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.cpu_run_label = QLabel(_t("cpu_analysis_idle"))
-        self.open_dir_btn = QToolButton()
-        self.open_dir_btn.setText(_t("btn_open_dir"))
-        self.open_dir_btn.setEnabled(False)
-        self.open_dir_btn.clicked.connect(self._open_output_dir)
-        self.settings_btn = QPushButton(_t("btn_settings"))
-        self.settings_btn.clicked.connect(self.open_settings)
-        self.status_bar.addWidget(self.cores_label)
-        self.status_bar.addWidget(self.cpu_sys_label)
-        self.status_bar.addWidget(self.cpu_sys_bar, 1)  # stretch: fills all free space
-        self.status_bar.addPermanentWidget(self.cpu_run_label)
-        self.status_bar.addPermanentWidget(self.open_dir_btn)
-        self.status_bar.addPermanentWidget(self.settings_btn)  # far bottom-right corner
-
-        self.cpu_timer = QTimer(self)
-        self.cpu_timer.setInterval(1000)
-        self.cpu_timer.timeout.connect(self.update_cpu_status)
-        if psutil is not None:
-            self.cpu_timer.start()
-        return self.status_bar
 
     # ---------- drag & drop ----------
 
@@ -776,8 +581,7 @@ class PhyMLApp(QWidget):
         self._populate_queue(files)
         if self._batch_mode:
             self.result_tabs.setCurrentWidget(self.queue_list.parentWidget())
-        self._cpu_samples = []
-        self._mon_procs = {}
+        self.status.track(self._active_pid)
         self._run_started = datetime.now()
         self._run_config = config
         self._run_inputs = inputs
@@ -787,6 +591,12 @@ class PhyMLApp(QWidget):
         self.worker.status.connect(self._on_file_status)
         self.worker.done.connect(self.pipeline_finished)
         self.worker.start()
+
+    def _active_pid(self):
+        """The root pid of the running analysis, for the CPU monitor."""
+        if self.worker is not None and self.worker.isRunning():
+            return self.worker.active_pid
+        return None
 
     def cancel_pipeline(self):
         if self.worker and self.worker.isRunning():
@@ -800,8 +610,7 @@ class PhyMLApp(QWidget):
             self.worker.wait()   # done is emitted at the end of run(): this returns at once
         self.last_result = result
         self.btn_run.setEnabled(True); self.btn_cancel.setEnabled(False)
-        avg = sum(self._cpu_samples) / len(self._cpu_samples) if self._cpu_samples else 0.0
-        self.cpu_run_label.setText(_t("cpu_analysis_done").format(int(avg), round(avg / 100, 1)))
+        self.status.stop_tracking()
         if result.files:
             rows = report.summary_rows(result.files)
             self._populate_stats(result)
@@ -811,7 +620,7 @@ class PhyMLApp(QWidget):
         self._failed_files = [f.file for f in result.files if f.status == 'fail']
         self.retry_btn.setVisible(bool(self._failed_files))
         self._last_out_dir = self._run_out_dir
-        self.open_dir_btn.setEnabled(self._last_out_dir is not None)
+        self.status.set_open_dir_enabled(self._last_out_dir is not None)
         if result.success and self.chk_show_tree.isChecked():
             tree = result.files[-1].tree
             if tree and os.path.exists(tree):
@@ -986,36 +795,3 @@ class PhyMLApp(QWidget):
                     self._log('system', _t("mpi_detected"))
         else:
             self._mpi_auto_path = ""
-
-    def update_cpu_status(self):
-        if psutil is None:
-            return
-        sys_pct = psutil.cpu_percent(interval=None)
-        self.cpu_sys_bar.setValue(int(sys_pct))
-        self.cpu_sys_label.setText(_t("cpu_sys").format(int(sys_pct)))
-        pid = self.worker.active_pid if self.worker is not None else None
-        if pid is not None and self.worker.isRunning():
-            try:
-                root = psutil.Process(pid)
-                pids = {pid} | {c.pid for c in root.children(recursive=True)}
-            except psutil.Error:
-                return
-            # cpu_percent() keeps per-call state inside each Process object,
-            # so objects must be reused across ticks to get non-zero values
-            for k in list(self._mon_procs):
-                if k not in pids:
-                    del self._mon_procs[k]
-            total = 0.0
-            for p in pids:
-                obj = self._mon_procs.get(p)
-                if obj is None:
-                    try:
-                        obj = self._mon_procs[p] = psutil.Process(p)
-                    except psutil.Error:
-                        continue
-                try:
-                    total += obj.cpu_percent(interval=None)
-                except psutil.Error:
-                    pass
-            self._cpu_samples.append(total)
-            self.cpu_run_label.setText(_t("cpu_analysis").format(int(total), round(total / 100, 1)))
