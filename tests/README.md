@@ -10,6 +10,8 @@ All suites run under pytest (`pip install -r requirements-dev.txt`):
 Layout:
 
 - `unit/`, `gui/` - fast checks. `gui/` builds `PhyMLApp` under `QT_QPA_PLATFORM=offscreen`.
+- `unit/fakes.py`, `unit/fake_tool.py` - `FakeEngine` and `fake_muscle()`: stand-ins for an
+  analysis program and MUSCLE, so the `PipelineRunner` tests need no binaries.
 - `e2e/` - end-to-end runs of the pipeline, batch mode, CPU monitor and IQ-TREE engine.
   `e2e/datasets.py` holds the synthetic two-clade dataset (fixture `synthetic`).
 - `data/` - static fixtures (stats files, trees).
