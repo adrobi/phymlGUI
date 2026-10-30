@@ -1,52 +1,117 @@
-"""Headless CLI: run the same pipeline without the GUI.
+"""Headless CLI: run the same pipeline without the GUI (and without Qt).
 
     python phymlgui.py --file input.fasta
     python phymlgui.py --batch folder/ --config preset.json
+
+Settings come from the user's config file (as in the window); --config is a JSON object
+laid over them. Log lines go to stdout, except level 'error' lines, which go to stderr.
+Exit codes: 0 - every file succeeded; 1 - a file failed or the run was cancelled;
+2 - usage or input problem (no --file/--batch, missing path, empty folder, unreadable
+or invalid settings/--config).
 """
 import argparse
 import json
 import os
 import sys
 
+from . import settings
+from .i18n import _t
+from .paths import AppPaths
+from .runner import PipelineRunner
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(prog='phymlgui', description='phymlGUI headless pipeline')
-    parser.add_argument('--file', help='single FASTA file')
-    parser.add_argument('--batch', help='folder with FASTA files')
-    parser.add_argument('--config', default='phyml_config.json',
-                        help='config JSON (defaults to phyml_config.json)')
-    args = parser.parse_args(argv)
+FASTA_EXTENSIONS = ('.fasta', '.fas', '.fa')
 
-    if not args.file and not args.batch:
-        parser.error('specify --file or --batch')
 
-    from phyml_core.i18n import _t
-    from phyml_core.paths import AppPaths
-    from phyml_core.runner import PipelineRunner
+class _Usage(Exception):
+    """Ends the run with exit code 2; the argument is the message for stderr."""
 
-    config = {}
-    if os.path.exists(args.config):
-        with open(args.config, encoding='utf-8') as f:
-            config = json.load(f)
 
+def _emit(stream, text):
+    """Print a line without ever failing on a console code page that lacks a character."""
+    try:
+        print(text, file=stream, flush=True)
+    except UnicodeEncodeError:
+        encoding = getattr(stream, 'encoding', None) or 'ascii'
+        print(text.encode(encoding, 'replace').decode(encoding), file=stream, flush=True)
+    except (OSError, ValueError):   # closed or broken pipe: nothing useful left to do
+        pass
+
+
+def _make_tolerant(stream):
+    reconfigure = getattr(stream, 'reconfigure', None)
+    if reconfigure is not None:
+        try:
+            reconfigure(errors='replace')
+        except (OSError, ValueError):
+            pass
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):
+        raise _Usage(self.format_usage().rstrip() + '\n' + message)
+
+
+def _collect_files(args):
     if args.batch:
+        if not os.path.isdir(args.batch):
+            raise _Usage(_t('err_box_msg'))
+        # the same rule as the window: *_aligned.fasta are this app's own MUSCLE outputs
         files = sorted(os.path.join(args.batch, f) for f in os.listdir(args.batch)
-                       if f.lower().endswith(('.fasta', '.fas', '.fa'))
+                       if f.lower().endswith(FASTA_EXTENSIONS)
                        and not f.lower().endswith('_aligned.fasta'))
         if not files:
-            print(_t("batch_empty"))
-            return 2
-    else:
-        files = [args.file]
+            raise _Usage(_t('batch_empty'))
+        return files
+    if not os.path.isfile(args.file):
+        raise _Usage(_t('err_box_msg'))
+    return [args.file]
 
-    runner = PipelineRunner(config, files, AppPaths.detect(),
-                            on_log=lambda level, text: print(text))
-    result = runner.run()  # synchronous, never raises
+
+def _load_params(paths, config_arg):
+    try:
+        params = settings.from_disk(settings.load(paths.config_file), paths)
+    except OSError as e:
+        raise _Usage(f'{paths.config_file}: {e}') from e
+    if config_arg:
+        try:
+            with open(config_arg, encoding='utf-8-sig') as f:
+                overlay = json.load(f)
+        except (OSError, ValueError) as e:   # includes JSONDecodeError and UnicodeDecodeError
+            raise _Usage(f'{config_arg}: {e}') from e
+        if not isinstance(overlay, dict):
+            raise _Usage(f'{config_arg}: not a JSON object')
+        params.update(overlay)
+    return params
+
+
+def main(argv=None) -> int:
+    _make_tolerant(sys.stdout)
+    _make_tolerant(sys.stderr)
+    parser = _Parser(prog='phymlgui', description='phymlGUI headless pipeline')
+    parser.add_argument('--file', help='single FASTA file')
+    parser.add_argument('--batch', help='folder with FASTA files')
+    parser.add_argument('--config', help='JSON object laid over the saved settings')
+    try:
+        args = parser.parse_args(argv)
+        if not args.file and not args.batch:
+            parser.error('specify --file or --batch')
+        files = _collect_files(args)
+        paths = AppPaths.detect()
+        params = _load_params(paths, args.config)
+    except _Usage as e:
+        _emit(sys.stderr, str(e))
+        return 2
+    except SystemExit as e:   # --help (0)
+        return e.code if isinstance(e.code, int) else 0
+
+    def on_log(level, text):
+        _emit(sys.stderr if level == 'error' else sys.stdout, text.rstrip('\r\n'))
+
+    result = PipelineRunner(params, files, paths, on_log=on_log).run()  # never raises
     trees = [f.tree for f in result.files if f.status == 'ok' and f.tree]
-
-    print('OK' if result.success else 'FAILED')
+    _emit(sys.stdout, 'OK' if result.success else 'FAILED')
     if trees:
-        print('tree:', trees[-1])
+        _emit(sys.stdout, 'tree: ' + trees[-1])
     return 0 if result.success else 1
 
 
