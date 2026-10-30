@@ -6,27 +6,8 @@ from PySide6.QtCore import QThread, Signal
 from Bio import AlignIO, SeqIO
 from Bio.Seq import Seq
 
+from .engines.phyml import parse_phyml_stats
 from .i18n import _t
-
-
-def parse_stats(stats_path):
-    """Parse key values from a PhyML 3.3 stats file into a dict."""
-    try:
-        with open(stats_path, encoding='utf-8', errors='replace') as f:
-            content = f.read()
-    except OSError:
-        return {}
-    def grab(pattern):
-        m = re.search(pattern, content)
-        return m.group(1) if m else ""
-    return {
-        'model': grab(r'Model of \w+ substitution:\s*(\S+)'),
-        'taxa': grab(r'Number of taxa:\s*(\d+)'),
-        'lnL': grab(r'Log-likelihood:\s*(-?[\d.]+)'),
-        'gamma': grab(r'Gamma shape parameter:\s*(-?[\d.]+)'),
-        'tstv': grab(r'transition/transversion ratio:\s*(-?[\d.]+)'),
-        'time': grab(r'Time used:\s*(\S+)'),
-    }
 
 
 def parse_iqtree_stats(stats_path):
@@ -241,7 +222,7 @@ class PipelineWorker(QThread):
             else:
                 self.log_signal.emit(_t("success_pipe"))
                 tree_path = f"{phylip_path}_phyml_tree.txt"
-                stats = parse_stats(tree_path.replace('_phyml_tree.txt', '_phyml_stats.txt'))
+                stats = parse_phyml_stats(tree_path.replace('_phyml_tree.txt', '_phyml_stats.txt'))
                 self.log_signal.emit(_t("stats_summary").format(
                     *(stats.get(k) or "n/a" for k in ('model', 'taxa', 'lnL', 'gamma', 'tstv', 'time'))))
                 return True, tree_path, stats

@@ -188,7 +188,10 @@
         "sum_col_lnl": "lnL",
         "sum_col_gamma": "Gamma",
         "sum_col_tstv": "Ts/Tv",
-        "sum_col_time": "Time"
+        "sum_col_time": "Time",
+        "val_not_number": "Parameter \"{}\" must be a positive number, got \"{}\".",
+        "val_no_exe": "{} executable not found: {}",
+        "val_no_mpiexec": "MPI is enabled but mpiexec was not found: {}"
     },
     "ru": {
         "tree_result": "Результат PhyML: {}",
@@ -379,6 +382,9 @@
         "sum_col_lnl": "lnL",
         "sum_col_gamma": "Гамма",
         "sum_col_tstv": "Ts/Tv",
-        "sum_col_time": "Время"
+        "sum_col_time": "Время",
+        "val_not_number": "Параметр «{}» должен быть положительным числом, получено «{}».",
+        "val_no_exe": "Не найден исполняемый файл {}: {}",
+        "val_no_mpiexec": "MPI включён, но mpiexec не найден: {}"
     }
 }
