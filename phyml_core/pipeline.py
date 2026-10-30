@@ -6,40 +6,9 @@ from PySide6.QtCore import QThread, Signal
 from Bio import AlignIO, SeqIO
 from Bio.Seq import Seq
 
+from .engines.iqtree import parse_iqtree_stats, ufboot_replicates
 from .engines.phyml import parse_phyml_stats
 from .i18n import _t
-
-
-def parse_iqtree_stats(stats_path):
-    """Parse key values from an IQ-TREE .iqtree report into a dict."""
-    try:
-        with open(stats_path, encoding='utf-8', errors='replace') as f:
-            content = f.read()
-    except OSError:
-        return {}
-    def grab(pattern):
-        m = re.search(pattern, content)
-        return m.group(1) if m else ""
-    return {
-        'model': grab(r'Best-fit model according to \w+:\s*(\S+)') or grab(r'Model of substitution:\s*(\S+)'),
-        'taxa': grab(r'Input data:\s*(\d+) sequences'),
-        'lnL': grab(r'Log-likelihood of the tree:\s*(-?[\d.]+)'),
-        'gamma': grab(r'Gamma shape alpha:\s*([\d.]+)'),
-        'tstv': '',
-        'time': (grab(r'Total wall-clock time used:\s*([\d.]+)') + ' s').strip(),
-    }
-
-
-UFBOOT_MIN_REPLICATES = 1000
-
-
-def ufboot_replicates(value):
-    """IQ-TREE -B value: UFBoot refuses fewer than 1000 replicates."""
-    try:
-        n = int(str(value).strip())
-    except ValueError:
-        n = 0
-    return str(max(n, UFBOOT_MIN_REPLICATES))
 
 
 # --- Background Worker Thread ---

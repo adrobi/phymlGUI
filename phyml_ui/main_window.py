@@ -18,6 +18,7 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence
 
 from phyml_core import __version__, presets, settings
+from phyml_core.engines import ENGINES
 from phyml_core.history import HistoryStore, best_tree, display_input, new_record
 from phyml_core.i18n import _t
 from phyml_core.paths import AppPaths
@@ -543,14 +544,10 @@ class PhyMLApp(QWidget):
 
     def update_models(self):
         self.cb_model.clear()
-        if self.engine_setting == 'iqtree':
-            models = ["MFP", "GTR+F+G4", "HKY+F+G4", "TIM2+F+G4", "TVM+F+G4"] \
-                if self.cb_datatype.currentData() == "nt" else \
-                ["MFP", "LG+G4", "WAG+G4", "JTT+G4", "mtREV+G4"]
-        else:
-            models = ["HKY85", "JC69", "K80", "F81", "F84", "TN93", "GTR", "custom"] if self.cb_datatype.currentData() == "nt" else \
-                     ["LG", "WAG", "JTT", "MtREV", "Dayhoff", "DCMut", "RtREV", "CPREV", "VT", "Blosum62", "MtMam", "MtArt", "HIVw", "HIVb", "custom"]
-        for m in models: self.cb_model.addItem(m, m)
+        # an unknown engine in a hand-edited config gets PhyML's list, as the pipeline runs PhyML for it
+        engine = ENGINES.get(self.engine_setting, ENGINES['phyml'])
+        for m in engine.models(self.cb_datatype.currentData()):
+            self.cb_model.addItem(m, m)
         if not self._is_loading: self.auto_save()
 
     def _update_fasta_info(self, path):

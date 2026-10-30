@@ -7,7 +7,7 @@ from conftest import DATA, ROOT
 
 from phyml_core import settings
 from phyml_core.engines import ENGINES
-from phyml_core.engines.base import (Engine, EngineOutputs, Issue, format_issue,
+from phyml_core.engines.base import (Engine, EngineOutputs, Issue, format_issue, parse_decimal,
                                      positive_int, positive_number)
 from phyml_core.engines.phyml import PhyML, parse_phyml_stats
 from phyml_core.launchers import Mpi, Native
@@ -62,9 +62,31 @@ def test_issue_and_outputs_are_frozen_values():
 
 def test_format_issue_fills_the_localized_template():
     from phyml_core.i18n import _t
-    issue = Issue('error', 'val_not_number', ('classes', '0'))
-    assert format_issue(issue) == _t('val_not_number').format('classes', '0')
-    assert 'classes' in format_issue(issue) and '0' in format_issue(issue)
+    issue = Issue('error', 'val_not_number', ('threshold', '0'))
+    assert format_issue(issue) == _t('val_not_number').format('threshold', '0')
+    assert 'threshold' in format_issue(issue) and '0' in format_issue(issue)
+
+
+@pytest.mark.parametrize('lang', ['en', 'ru'])
+@pytest.mark.parametrize('name, label_key', [
+    ('bootstrap_replicates', 'lbl_boot'), ('mpi_np', 'lbl_mpi_np'), ('pinv', 'lbl_pinv'),
+    ('classes', 'lbl_classes'), ('tstv', 'lbl_tstv'), ('gamma', 'lbl_gamma')])
+def test_format_issue_uses_ui_labels_for_parameter_names(monkeypatch, lang, name, label_key):
+    from phyml_core import i18n
+    monkeypatch.setattr(i18n, 'LANG', lang)
+    label = i18n._t(label_key)
+    assert label.endswith(':')                      # the UI label carries a trailing colon...
+    shown = label[:-1].strip()                      # ...which the message drops
+    text = format_issue(Issue('error', 'val_not_number', (name, 'x')))
+    assert text == i18n._t('val_not_number').format(shown, 'x')
+    assert shown in text and name not in text
+
+
+def test_format_issue_labels_only_parameter_names_of_val_not_number():
+    from phyml_core.i18n import _t
+    issue = Issue('error', 'val_no_exe', ('mpi_np', 'C:/x'))
+    assert format_issue(issue) == _t('val_no_exe').format('mpi_np', 'C:/x')
+    assert 'mpi_np_typo' in format_issue(Issue('error', 'val_not_number', ('mpi_np_typo', 'x')))
 
 
 @pytest.mark.parametrize('key', ['val_not_number', 'val_no_exe', 'val_no_mpiexec', 'mpi_boot_msg'])
@@ -79,9 +101,23 @@ def test_positive_number_accepts_plain_positive_decimals(value):
     assert positive_number(value)
 
 
-@pytest.mark.parametrize('value', ['', '0', '0.0', '-1', 'abc', 'e', '1e3', 'nan', 'inf', '1_0', '1,5', '\u0661\u0662'])
+@pytest.mark.parametrize('value', ['', '0', '0.0', '-1', 'abc', 'e', 'nan', 'inf', '1_0', '1,5', '\u0661\u0662',
+                                   '+1', '-1e3', '1e', 'e3', '1e+', '1e-', '1e3.5', '1e_3', '1 e3', 'infinity',
+                                   '1e999', '0e0', '1e-999', '1e\u0663', '\u0661e3'])
 def test_positive_number_rejects_everything_else(value):
     assert not positive_number(value)
+
+
+@pytest.mark.parametrize('value, expected', [('1e-3', 0.001), ('2E2', 200.0), ('1.5e+1', 15.0), ('.5e1', 5.0),
+                                             ('2.e1', 20.0), (' 1e3 ', 1000.0), ('0.5', 0.5), ('3', 3.0)])
+def test_parse_decimal_accepts_exponent_notation(value, expected):
+    assert parse_decimal(value) == expected
+    assert positive_number(value)
+
+
+@pytest.mark.parametrize('value', ['', '-1', '+1', 'nan', 'inf', '1e999', '1_0', '\u0661\u0662', 'e3', '1e'])
+def test_parse_decimal_rejects_what_float_would_misread(value):
+    assert parse_decimal(value) is None
 
 
 @pytest.mark.parametrize('value, ok', [('1', True), ('100', True), (' 4 ', True), ('0', False), ('-2', False),
@@ -305,7 +341,8 @@ def test_validate_pinv_is_e_or_a_fraction_below_one(paths, exe, pinv, ok):
 
 @pytest.mark.parametrize('field', ['tstv', 'gamma'])
 @pytest.mark.parametrize('value, ok', [('e', True), ('', True), ('4.0', True), ('2', True), ('0.5', True),
-                                       ('0', False), ('-1', False), ('x', False), ('1e3', False)])
+                                       ('1e-3', True), ('2E2', True),
+                                       ('0', False), ('-1', False), ('x', False), ('1e', False), ('nan', False)])
 def test_validate_tstv_and_gamma_are_e_or_positive(paths, exe, field, value, ok):
     issues = PhyML().validate(dict(P, phyml_path=exe, **{field: value}), paths)
     assert (issues == []) is ok

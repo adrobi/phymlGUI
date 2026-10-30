@@ -7,7 +7,8 @@ from typing import Dict, List, Tuple, Union
 from ..launchers import Mpi, Native
 from ..paths import AppPaths
 from ..utils import is_mpi_binary
-from .base import Engine, EngineOutputs, Issue, parse_decimal, positive_int, positive_number
+from .base import (Engine, EngineOutputs, Issue, param_text, parse_decimal, positive_int,
+                   positive_number)
 
 NT_MODELS = ("HKY85", "JC69", "K80", "F81", "F84", "TN93", "GTR", "custom")
 AA_MODELS = ("LG", "WAG", "JTT", "MtREV", "Dayhoff", "DCMut", "RtREV", "CPREV", "VT", "Blosum62",
@@ -34,12 +35,6 @@ def parse_phyml_stats(stats_path: str) -> dict:
         'tstv': grab(r'transition/transversion ratio:\s*(-?[\d.]+)'),
         'time': grab(r'Time used:\s*(\S+)'),
     }
-
-
-def _text(params: dict, key: str, default: str = '') -> str:
-    """A parameter as trimmed text; a missing or None value gives the default."""
-    value = params.get(key)
-    return default if value is None else str(value).strip()
 
 
 def _estimate_or_positive(value: str) -> bool:
@@ -69,7 +64,7 @@ class PhyML(Engine):
     def validate(self, params: dict, paths: AppPaths) -> List[Issue]:
         issues: List[Issue] = []
         use_mpi = bool(params.get('use_mpi', False))
-        bootstrap = _text(params, 'support_method', 'bootstrap') == 'bootstrap'
+        bootstrap = param_text(params, 'support_method', 'bootstrap') == 'bootstrap'
 
         exe = self.executable(params, paths)
         if not exe or not os.path.isfile(exe):
@@ -78,7 +73,7 @@ class PhyML(Engine):
             issues.append(Issue('error', 'mpi_boot_msg'))
 
         if use_mpi:
-            mpiexec = _text(params, 'mpirun_path', 'mpiexec')
+            mpiexec = param_text(params, 'mpirun_path', 'mpiexec')
             if not _mpiexec_found(mpiexec):
                 issues.append(Issue('error', 'val_no_mpiexec', (mpiexec,)))
 
@@ -87,19 +82,19 @@ class PhyML(Engine):
                 issues.append(Issue('error', 'val_not_number', (name, value)))
 
         if bootstrap:
-            value = _text(params, 'bootstrap_replicates', '100')
+            value = param_text(params, 'bootstrap_replicates', '100')
             check('bootstrap_replicates', value, positive_int(value))
         # empty tstv / pinv / classes / gamma are legal: they are left out of the argv
-        value = _text(params, 'tstv')
+        value = param_text(params, 'tstv')
         check('tstv', value, not value or _estimate_or_positive(value))
-        value = _text(params, 'pinv')
+        value = param_text(params, 'pinv')
         check('pinv', value, not value or _estimate_or_fraction(value))
-        value = _text(params, 'classes')
+        value = param_text(params, 'classes')
         check('classes', value, not value or positive_int(value))
-        value = _text(params, 'gamma')
+        value = param_text(params, 'gamma')
         check('gamma', value, not value or _estimate_or_positive(value))
         if use_mpi:
-            value = _text(params, 'mpi_np', '2')
+            value = param_text(params, 'mpi_np', '2')
             check('mpi_np', value, positive_int(value))
         return issues
 
@@ -111,18 +106,18 @@ class PhyML(Engine):
 
     def command(self, exe: str, phylip: str, params: dict) -> List[str]:
         argv = [exe, '-i', phylip,
-                '-d', _text(params, 'datatype', 'nt'),
-                '-m', _text(params, 'model', 'HKY85')]
-        support = _text(params, 'support_method', 'bootstrap')
-        argv += ['-b', _text(params, 'bootstrap_replicates', '100') if support == 'bootstrap' else support]
-        freq = _text(params, 'freq')
+                '-d', param_text(params, 'datatype', 'nt'),
+                '-m', param_text(params, 'model', 'HKY85')]
+        support = param_text(params, 'support_method', 'bootstrap')
+        argv += ['-b', param_text(params, 'bootstrap_replicates', '100') if support == 'bootstrap' else support]
+        freq = param_text(params, 'freq')
         if freq and freq != 'default':
             argv += ['-f', freq]
         for flag, key in (('-t', 'tstv'), ('-v', 'pinv'), ('-c', 'classes'), ('-a', 'gamma')):
-            value = _text(params, key)
+            value = param_text(params, key)
             if value:
                 argv += [flag, value]
-        argv += ['-s', _text(params, 'search', 'NNI'), '-o', _text(params, 'optimize', 'tlr')]
+        argv += ['-s', param_text(params, 'search', 'NNI'), '-o', param_text(params, 'optimize', 'tlr')]
         if params.get('parsimony'):
             argv.append('-p')
         return argv
@@ -140,5 +135,5 @@ class PhyML(Engine):
         """Call validate() first: a bad mpi_np raises ValueError here."""
         if not params.get('use_mpi', False):
             return Native()
-        mpiexec = _text(params, 'mpirun_path', 'mpiexec')
-        return Mpi((mpiexec and shutil.which(mpiexec)) or mpiexec, int(_text(params, 'mpi_np', '2')))
+        mpiexec = param_text(params, 'mpirun_path', 'mpiexec')
+        return Mpi((mpiexec and shutil.which(mpiexec)) or mpiexec, int(param_text(params, 'mpi_np', '2')))

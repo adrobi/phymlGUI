@@ -123,3 +123,24 @@ def test_empty_folder_blocked(window, warned, tmp_path):
     assert warned, 'empty folder must trigger a warning'
     assert warned[0][2] == _t('batch_empty'), 'blocked for the wrong reason'
     assert window.worker is None or not window.worker.isRunning()
+
+
+@pytest.mark.parametrize('engine', ['phyml', 'iqtree'])
+@pytest.mark.parametrize('datatype', ['nt', 'aa'])
+def test_model_combo_lists_the_models_of_the_engine(window, engine, datatype):
+    """The model list comes from the engine registry (data and text both)."""
+    from phyml_core.engines import ENGINES
+    window.engine_setting = engine
+    window.set_combo_by_data(window.cb_datatype, datatype)
+    window.update_models()
+    shown = [(window.cb_model.itemText(i), window.cb_model.itemData(i)) for i in range(window.cb_model.count())]
+    expected = ENGINES[engine].models(datatype)
+    assert shown == [(m, m) for m in expected]
+    assert window.cb_model.currentData() == expected[0]
+
+
+def test_unknown_engine_in_the_settings_shows_the_phyml_models(window):
+    from phyml_core.engines import ENGINES
+    window.engine_setting = 'no-such-engine'
+    window.update_models()
+    assert [window.cb_model.itemData(i) for i in range(window.cb_model.count())] == ENGINES['phyml'].models('nt')

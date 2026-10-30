@@ -9,6 +9,7 @@ import pytest
 from Bio import AlignIO, Phylo
 
 from datasets import synthetic  # noqa: F401  (fixture)
+from phyml_core.engines import ENGINES
 from phyml_core.pipeline import PipelineWorker
 
 pytestmark = pytest.mark.needs_iqtree
@@ -96,11 +97,8 @@ def test_gui_validation_and_run_with_xlsx(window, warned, qtbot, binaries, run_d
     assert wb.active.max_row == 2
 
 
-def test_every_listed_model_accepted(window, binaries, run_dir):
-    """Every model offered in the IQ-TREE model list is accepted by IQ-TREE."""
-    window.engine_setting = 'iqtree'
-    window.update_models()
-
+def test_every_listed_model_accepted(binaries, run_dir):
+    """Every model the IQ-TREE engine offers is accepted by IQ-TREE."""
     nt_phy = run_dir / 'test_prealigned.phy'
     AlignIO.convert(str(run_dir / 'test_prealigned.fasta'), 'fasta',
                     str(nt_phy), 'phylip-relaxed')
@@ -116,9 +114,7 @@ def test_every_listed_model_accepted(window, binaries, run_dir):
 
     rejected = []
     for dt, phy in {'nt': nt_phy, 'aa': aa_phy}.items():
-        window.set_combo_by_data(window.cb_datatype, dt)
-        models = [window.cb_model.itemData(i) for i in range(window.cb_model.count())]
-        for m in models:
+        for m in ENGINES['iqtree'].models(dt):
             if m == 'MFP':
                 continue  # ModelFinder is exercised by the runs above
             r = subprocess.run([binaries['iqtree'], '-s', str(phy), '-m', m, '-n', '0',

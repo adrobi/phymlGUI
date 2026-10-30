@@ -1,6 +1,6 @@
 from conftest import DATA
+from phyml_core.engines.iqtree import parse_iqtree_stats
 from phyml_core.engines.phyml import parse_phyml_stats
-from phyml_core.pipeline import parse_iqtree_stats
 
 
 def test_parse_phyml_stats():
