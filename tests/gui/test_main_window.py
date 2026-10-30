@@ -328,3 +328,69 @@ def test_prerun_validation_lists_all_errors(window, data_dir, tmp_path, warned):
     assert format_issue(Issue('error', 'val_not_number', ('tstv', 'abc'))) in lines
     assert format_issue(Issue('error', 'val_not_number', ('classes', 'x'))) in lines
     assert window.worker is None and window.btn_run.isEnabled()
+
+
+def wait_for_sleeper(window, qtbot):
+    """The process tree of the running step once fake_tool's sleeping child is up."""
+    import psutil
+    from unit.fake_tool import SLEEPER
+    found = []
+
+    def up():
+        pid = window.worker.active_pid
+        if pid is None:
+            return False
+        try:
+            root = psutil.Process(pid)
+            kids = root.children(recursive=True)
+        except psutil.Error:
+            return False
+        if any(SLEEPER in ' '.join(k.cmdline()) for k in kids):
+            found[:] = [root, *kids]
+            return True
+        return False
+    qtbot.waitUntil(up, timeout=10000)
+    return found
+
+
+def test_retry_during_a_running_run_is_ignored(window, qtbot, tmp_path, monkeypatch, warned):
+    use_fake_engine(window, monkeypatch, fake_mode='hang')
+    fasta = write_fasta(tmp_path / 'a.fasta')
+    window.fasta_path_input.setText(fasta)
+    window._failed_files = [fasta]          # as left by an earlier failed run
+    window.retry_btn.setVisible(True)
+    window.start_pipeline()
+    worker = window.worker
+    assert window.retry_btn.isHidden(), 'retry must not be offered while a run is going'
+    wait_for_sleeper(window, qtbot)
+    window._retry_failed()
+    window.start_pipeline()
+    window.btn_run.click()
+    assert window.worker is worker and worker.isRunning()
+    assert not warned
+    window.cancel_pipeline()
+    qtbot.waitUntil(lambda: window.btn_run.isEnabled(), timeout=15000)
+    assert worker.isFinished(), 'Run is enabled again only after the thread has ended'
+    assert window.last_result.cancelled
+
+
+def test_closing_the_window_kills_the_running_process_tree(window, qtbot, tmp_path, monkeypatch):
+    import threading
+    use_fake_engine(window, monkeypatch, fake_mode='hang')
+    window.fasta_path_input.setText(write_fasta(tmp_path / 'a.fasta'))
+    window.start_pipeline()
+    procs = wait_for_sleeper(window, qtbot)
+    assert len(procs) >= 2
+    runner = window.worker._runner
+    callers = []
+    real_cancel = runner.cancel
+
+    def cancel():
+        callers.append(threading.current_thread())
+        real_cancel()
+    monkeypatch.setattr(runner, 'cancel', cancel)
+    window.close()
+    # at exit a daemon thread would be cut off: the kill must finish before close() returns
+    assert threading.main_thread() in callers, 'close() left the kill to a daemon thread'
+    alive = [p.pid for p in procs if p.is_running()]
+    assert alive == [], f'processes left after close: {alive}'

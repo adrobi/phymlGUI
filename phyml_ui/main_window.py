@@ -530,7 +530,9 @@ class PhyMLApp(QWidget):
 
     def closeEvent(self, event):
         if self.worker and self.worker.isRunning():
-            self.worker.cancel()
+            # synchronous: after close the process may exit and cut off a daemon thread,
+            # leaving phyml-mpi / smpd children alive
+            self.worker.cancel(block=True)
             self.worker.wait()
         self.auto_save()  # persist window geometry and splitter ratios
         event.accept()
@@ -728,6 +730,8 @@ class PhyMLApp(QWidget):
         if idx >= 0: combo.setCurrentIndex(idx)
 
     def start_pipeline(self, files_override=None):
+        if self.worker is not None and self.worker.isRunning():
+            return   # one run at a time: replacing a running worker would destroy its thread
         if isinstance(files_override, bool):  # defensive: Qt clicked(checked)
             files_override = None
         if files_override is None:
@@ -767,6 +771,7 @@ class PhyMLApp(QWidget):
         self._remember_recent(target)
         if not self._is_loading: self.auto_save()
         self.btn_run.setEnabled(False); self.btn_cancel.setEnabled(True); self.log_console.clear()
+        self.retry_btn.setVisible(False)
         self.result_tabs.setCurrentWidget(self.log_console)
         self._populate_queue(files)
         if self._batch_mode:
@@ -791,6 +796,8 @@ class PhyMLApp(QWidget):
 
     def pipeline_finished(self, result):
         """Show a finished run (a RunResult): tables, summary files, history, retry, tree."""
+        if self.worker is not None:
+            self.worker.wait()   # done is emitted at the end of run(): this returns at once
         self.last_result = result
         self.btn_run.setEnabled(True); self.btn_cancel.setEnabled(False)
         avg = sum(self._cpu_samples) / len(self._cpu_samples) if self._cpu_samples else 0.0

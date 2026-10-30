@@ -49,7 +49,11 @@ class RunWorker(QThread):
     def run(self) -> None:
         self.done.emit(self._runner.run())   # run() never raises
 
-    def cancel(self) -> None:
-        """Ask the runner to stop and return at once: killing the process tree can take
-        seconds, which must not be spent on the GUI thread."""
+    def cancel(self, block: bool = False) -> None:
+        """Ask the runner to stop. By default this returns at once: killing the process
+        tree can take seconds, which must not be spent on the GUI thread. block=True kills
+        on the calling thread (at exit, where a daemon thread would be cut off)."""
+        if block:
+            self._runner.cancel()
+            return
         threading.Thread(target=self._runner.cancel, name='run-cancel', daemon=True).start()
