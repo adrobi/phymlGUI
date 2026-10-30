@@ -415,6 +415,63 @@ def test_cancel_from_a_callback_and_after_finish_is_safe(tmp_path, paths):
     assert runner.active_pid is None
 
 
+def test_error_while_cancelled_keeps_its_message(tmp_path, paths):
+    """A real failure that coincides with a cancel is 'cancelled' but not silent."""
+    fasta = write_fasta(tmp_path / 'a.fasta', ALIGNED)
+    rec = Recorder()
+    holder = {}
+    converted = _t('conv_success').split('{}')[0]
+
+    def on_log(level, text):
+        rec.on_log(level, text)
+        if text.startswith(converted):   # past the last checkpoint before the engine step
+            holder['runner'].cancel()
+
+    runner = PipelineRunner({'engine': 'fake', 'fake_mode': 'raise'}, [fasta], paths,
+                            on_log=on_log, on_status=rec.on_status,
+                            engines={'fake': FakeEngine()})
+    holder['runner'] = runner
+    result = runner.run()
+    file = result.files[0]
+    assert result.cancelled
+    assert file.status == 'cancelled'
+    assert 'boom' in file.error
+    assert any('boom' in text for text in rec.texts('error'))
+
+
+def test_cancel_does_not_hold_the_lock_while_killing(tmp_path, paths, monkeypatch):
+    """cancel() kills outside the runner's lock: a slow kill must not block other threads."""
+    fasta = write_fasta(tmp_path / 'a.fasta', ALIGNED)
+    rec = Recorder()
+    runner = make_runner([fasta], paths, rec, fake_mode='hang')
+    real_kill = runner_module.kill_process_tree
+    seen = {}
+
+    def slow_kill(pid):
+        acquired = runner._lock.acquire(timeout=2)   # same thread: fails if cancel holds it
+        if acquired:
+            runner._lock.release()
+        seen['lock_free'] = acquired
+        time.sleep(0.5)
+        real_kill(pid)
+
+    monkeypatch.setattr(runner_module, 'kill_process_tree', slow_kill)
+    thread, box = start(runner)
+    procs = []
+    try:
+        procs = wait_for_sleeper(runner)
+        canceller = threading.Thread(target=runner.cancel, daemon=True)
+        canceller.start()
+        canceller.join(WAIT)
+        thread.join(WAIT)
+        assert not thread.is_alive(), 'run() did not return after cancel()'
+        assert seen == {'lock_free': True}
+        assert box['result'].files[0].status == 'cancelled'
+    finally:
+        runner.cancel()
+        kill_all(procs)
+
+
 def test_callbacks_that_raise_do_not_escape(tmp_path, paths):
     fasta = write_fasta(tmp_path / 'a.fasta', ALIGNED)
 

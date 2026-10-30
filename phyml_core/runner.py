@@ -128,11 +128,15 @@ class PipelineRunner:
         """Stop the run: no new step starts, the running one loses its process tree."""
         self._cancelled.set()
         try:
+            # only the snapshot is taken under the lock: the kill can take a while and the
+            # caller may be the GUI thread. No process starts after this point (_execute
+            # checks the flag under the lock), and holding `proc` keeps its handle open, so
+            # on Windows its pid cannot be reused while we kill it.
             with self._lock:
                 proc = self._proc
-                # poll() is None: not reaped yet, so the pid still belongs to this process
-                if proc is not None and proc.poll() is None:
-                    kill_process_tree(proc.pid)
+                running = proc is not None and proc.poll() is None
+            if running:
+                kill_process_tree(proc.pid)
         except Exception:
             pass
 
@@ -182,12 +186,11 @@ class PipelineRunner:
             self._log('system', _t(c.args[0]))
             return FileResult(fasta, 'cancelled')
         except Exception as e:
-            if self._cancelled.is_set():   # most likely caused by the cancel itself
-                self._log('system', _t('cancel_analysis'))
-                return FileResult(fasta, 'cancelled')
+            # whatever a cancel itself causes arrives as _Cancelled; this is a real failure
             message = e.args[0] if isinstance(e, _FileFailed) else _t('err_crit').format(e)
             self._log('error', message)
-            return FileResult(fasta, 'fail', error=message.strip())
+            status = 'cancelled' if self._cancelled.is_set() else 'fail'
+            return FileResult(fasta, status, error=message.strip())
 
     def _process(self, fasta: str) -> Tuple[str, dict]:
         key = param_text(self._params, 'engine', 'phyml')
