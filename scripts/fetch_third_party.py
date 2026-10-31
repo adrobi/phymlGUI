@@ -62,7 +62,10 @@ def _extract(archive, members, dest):
 
 
 def _build(spec, archive, dest):
-    subprocess.run([*spec['build'], archive, dest], check=True, cwd=ROOT)
+    command = list(spec['build'])
+    if command[0] == 'bash' and os.environ.get('PHYMLGUI_BASH'):
+        command[0] = os.environ['PHYMLGUI_BASH']   # e.g. MSYS2's bash on Windows
+    subprocess.run([*command, archive, dest], check=True, cwd=ROOT)
     written = [os.path.join(dest, name) for name in spec.get('outputs', [])]
     missing = [p for p in written if not os.path.isfile(p)]
     if missing:

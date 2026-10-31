@@ -4,6 +4,7 @@
 # Run inside MSYS2 UCRT64 (mingw-w64-ucrt-x86_64-{gcc,cmake,ninja}).
 # Usage: build_raxml_windows.sh <raxml-ng_v2.0.3_source.zip> <dest>
 set -euo pipefail
+[ -d /ucrt64/bin ] && export PATH="/ucrt64/bin:/usr/bin:$PATH"
 
 here=$(cd "$(dirname "$0")" && pwd)
 src_archive=$(cygpath -u "$1" 2>/dev/null || echo "$1")

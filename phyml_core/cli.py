@@ -17,6 +17,7 @@ import sys
 
 from . import settings
 from .i18n import _t
+from . import __version__
 from .paths import AppPaths
 from .runner import PipelineRunner
 
@@ -94,6 +95,7 @@ def main(argv=None) -> int:
     parser.add_argument('--file', help='single FASTA file')
     parser.add_argument('--batch', help='folder with FASTA files')
     parser.add_argument('--config', help='JSON object laid over the saved settings')
+    parser.add_argument('--version', action='version', version=f'phymlGUI {__version__}')
     try:
         args = parser.parse_args(argv)
         if not args.file and not args.batch:

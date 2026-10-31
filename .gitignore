@@ -1,7 +1,7 @@
 phyml-mpi.exe
 /build
 /dist
-phymlgui.spec
+/phymlgui.spec
 __pycache__/
 phyml_config.json
 phymlgui v1.1/
@@ -14,3 +14,4 @@ release.json
 release_resp.json
 asset_resp.json
 /bin/
+/build-bin/
