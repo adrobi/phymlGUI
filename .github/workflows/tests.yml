@@ -49,27 +49,35 @@ jobs:
           set +e
           try() { echo "--- $1"; sh -c "$2" > /tmp/out.txt 2>&1; echo "exit=$?"; grep -a -E "Fatal|passed|failed|rror" /tmp/out.txt | head -3; }
           cat > /tmp/refs.py <<'EOF'
-          import os, subprocess, sys, time
+          import gc, os, subprocess, sys
           import psutil
-          child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
-          me = psutil.Process(os.getpid())
+          print('psutil', psutil.__version__, sys.version)
+          gc.disable()
+          child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+          proc = psutil.Process(child.pid)
+          def wait0():
+              try:
+                  proc.wait(timeout=0)
+              except psutil.TimeoutExpired:
+                  pass
+          def wait_short():
+              try:
+                  proc.wait(timeout=0.001)
+              except psutil.TimeoutExpired:
+                  pass
           calls = {
-              'cpu_percent()': lambda: psutil.cpu_percent(interval=None),
-              'cpu_count(logical=False)': lambda: psutil.cpu_count(logical=False),
-              'cpu_count(logical=True)': lambda: psutil.cpu_count(logical=True),
-              'Process(pid)': lambda: psutil.Process(child.pid),
-              'children(recursive)': lambda: me.children(recursive=True),
-              'proc.cpu_percent': lambda: psutil.Process(child.pid).cpu_percent(interval=None),
-              'is_running': lambda: psutil.Process(child.pid).is_running(),
-              'status': lambda: psutil.Process(child.pid).status(),
-              'pid_exists': lambda: psutil.pid_exists(child.pid),
-              'wait_procs(0)': lambda: psutil.wait_procs([psutil.Process(child.pid)], timeout=0),
+              'Process.wait(timeout=0)': wait0,
+              'Process.wait(timeout=0.001)': wait_short,
+              'wait_procs([p], 0)': lambda: psutil.wait_procs([proc], timeout=0),
+              'wait_procs([p], 0.001)': lambda: psutil.wait_procs([proc], timeout=0.001),
+              'children(recursive)': lambda: psutil.Process(os.getpid()).children(recursive=True),
           }
           for name, call in calls.items():
-              t0, f0 = sys.getrefcount(True), sys.getrefcount(False)
-              for _ in range(200):
-                  call()
-              print(f'{name:28} dTrue={sys.getrefcount(True) - t0:+5} dFalse={sys.getrefcount(False) - f0:+5}')
+              for n in (100, 400):
+                  t0, f0 = sys.getrefcount(True), sys.getrefcount(False)
+                  for _ in range(n):
+                      call()
+                  print(f'{name:30} n={n:4} dTrue={sys.getrefcount(True) - t0:+6} dFalse={sys.getrefcount(False) - f0:+6}')
           child.kill()
           EOF
           sed -i 's/^          //' /tmp/refs.py
