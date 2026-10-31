@@ -1,90 +1,117 @@
-# phymlGUI: Automated Pipeline for Phylogenetic Analysis
+# <img src="icon.png" width="48" align="center"> phymlGUI
 
-[English Version](#english) | [Русская версия](#russian)
+English | [Русский](README.ru.md)
+
+Open-source desktop tool for building maximum-likelihood phylogenetic trees from FASTA files. It aligns unaligned sequences with MUSCLE, runs **PhyML** (serial or MPI) or **IQ-TREE** (ModelFinder, ultrafast bootstrap) and shows the tree in an interactive viewer. Single files or whole folders, with a run history and parameter presets. Ready-to-run packages for Windows and Linux with all analysis programs included. English/Russian interface, dark and light themes.
+
+![phymlGUI: PhyML with MPI bootstrap on mammalian cytochrome b](docs/screenshots/main.png)
+
+## Features
+
+### 1. Analysis pipeline
+- **Two engines:** PhyML 3.3 (serial or parallel through MPI) and IQ-TREE 2 (automatic model selection with ModelFinder, ultrafast bootstrap), switchable in Settings.
+- **Alignment on the fly:** unaligned FASTA is detected and aligned with MUSCLE before the analysis; aligned files go straight to the engine.
+- **Input checks before the run:** IDs are cleaned and checked for collisions, FASTA is converted to relaxed PHYLIP, and invalid settings (a missing program, an MPI-only build without MPI, bad numbers) are listed together before anything starts.
+- **Parallel computing:** MPI through `mpiexec` (Microsoft MPI, Windows) or `mpirun` (OpenMPI, Linux); the core count is pre-filled from the physical cores.
+- **Live CPU monitor:** the status bar shows the system load and the load of the analysis process tree.
+- **Safe cancel:** Cancel stops the whole process tree (`mpiexec` and every PhyML rank).
+
+### 2. Tree viewer
+- **Layouts:** rectangular, slanted and circular, with a distance grid and a scale in substitutions per site.
+- **Supports:** bootstrap / aLRT / UFBoot values on branches, highlighting by a threshold.
+- **Editing the view:** clade collapsing, rerooting on an outgroup, zoom and pan.
+- **Comparison:** majority-rule consensus from bootstrap trees and Robinson–Foulds distance between two topologies.
+- **Export:** PNG, SVG and PDF.
+
+![Dark theme, slanted layout](docs/screenshots/dark.png)
+
+### 3. IQ-TREE with ModelFinder
+- **Model selection:** `MFP` lets ModelFinder choose the substitution model; the chosen model, log-likelihood, gamma shape and run time appear in the Statistics tab.
+- **Ultrafast bootstrap:** UFBoot supports on the tree; fewer than 1000 replicates (the UFBoot minimum) are raised to 1000 with a warning.
+
+![IQ-TREE run with the statistics of the chosen model](docs/screenshots/iqtree.png)
+
+### 4. Batch mode, history and presets
+- **Batch mode:** a whole folder of FASTA files in one run, with a live per-file queue, statuses, retry of the failed files and an N/M summary.
+- **Reports:** `phymlgui_summary.csv` and `phymlgui_summary.xlsx` with the model, taxa, log-likelihood, gamma, Ts/Tv and run time of every file.
+- **Run history:** every run is recorded with its parameters; a double click reopens its tree.
+- **Presets:** built-in and user parameter presets, stored together with the engine.
+
+### 5. Command line
+The same pipeline without the window, for scripts and servers:
+
+```bash
+phymlgui-cli.exe --file data.fasta                  # Windows package
+./phymlGUI-2.0.0-x86_64.AppImage --batch folder/    # Linux package
+python phymlgui.py --file data.fasta --config preset.json
+```
+
+Settings come from the data folder; `--config` is a JSON object laid over them. Exit codes: `0` success, `1` a file failed or the run was cancelled, `2` a usage or input problem.
 
 ---
 
-<a name="english"></a>
-## 🇺🇸 English Version
+## Download
 
-**phymlGUI** is a graphical interface for Windows that automates the construction of phylogenetic trees using the Maximum Likelihood method.
+Ready-to-run packages are on the [Releases](https://github.com/adrobi/phymlGUI/releases) page; Python is not required.
 
-### 🛠 Core Capabilities
-* **Two Engines:** **PhyML** (serial or MPI) and **IQ-TREE** (automatic model selection with ModelFinder, ultrafast bootstrap) — switchable in Settings.
-* **Integrated Pipeline:** Automatically detects unaligned sequences and runs **MUSCLE** before passing data to the engine.
-* **Parallel Computing (MPI):** Supports execution via `mpirun`/`mpiexec` for multi-core processing; MPI binaries are detected automatically and misconfigured bootstrap runs are blocked with an explanation.
-* **Batch Mode:** Process a whole folder of FASTA files in one run — a live per-file queue with statuses, retry of failed files, an N/M summary and automatic `phymlgui_summary.csv` / `.xlsx` reports.
-* **Hardware Awareness:** Physical/logical core detection (the `np` field is pre-filled), plus a live CPU status bar showing both system load and the utilization of the analysis process tree.
-* **Tree Viewer:** Rectangular / slanted / circular layouts, support-value threshold highlighting, clade collapsing, outgroup rerooting, majority-rule consensus from bootstrap trees, Robinson–Foulds topology comparison and PNG/SVG/PDF export.
-* **Run History and Presets:** every run is recorded (double-click reloads its tree); built-in and user parameter presets.
-* **Headless CLI:** `python phymlgui.py --file data.fasta` / `--batch folder/` runs the same pipeline without the GUI. Settings come from the data folder (not from a `phyml_config.json` in the current directory); `--config preset.json` is a JSON object laid over them. Exit codes: 0 success, 1 a file failed or the run was cancelled, 2 usage or input problem.
-* **Data Sanitization / Conversion:** cleans sequence IDs, converts `FASTA` to `PHYLIP-relaxed`.
-* **Themes:** light/dark (can follow the Windows system theme) with a selectable accent color.
+- **Windows 10/11, 64-bit:** `phymlGUI-<version>-windows-x64.zip`. Unpack the whole archive and run `phymlgui.exe` (`phymlgui-cli.exe` for the command line). PhyML needs [Microsoft MPI](https://github.com/microsoft/Microsoft-MPI/releases) (`msmpisetup.exe`), also for serial runs: the bundled PhyML is an MPI build.
+- **Linux x86_64:** `phymlGUI-<version>-x86_64.AppImage`. Run `chmod +x phymlGUI-*.AppImage` and start it; without FUSE add `--appimage-extract-and-run`. Built on Ubuntu 22.04 (glibc 2.35 or newer). MPI mode needs OpenMPI: `sudo apt install openmpi-bin`.
+- **Checksums:** `SHA256SUMS`, verify with `sha256sum -c SHA256SUMS`.
 
-### ⚙️ Requirements
-* **Executables:** `phyml.exe` (or MPI version) and `muscle.exe`.
-* **Python packages:** Python 3.11+ (3.12+ on Linux) with `PySide6`, `matplotlib`, `biopython` and `psutil` (`pip install -r requirements.txt`).
-* **MPI Environment:** PhyML on Windows needs **Microsoft MPI** (install `msmpisetup.exe` from the official Microsoft GitHub), also for serial runs: the bundled PhyML is an MPI build.
-* **Settings and history:** stored next to the exe when that folder is writable, otherwise in `%APPDATA%\phymlGUI` (Windows) or `~/.config/phymlGUI` (Linux, `$XDG_CONFIG_HOME`). Set `PHYMLGUI_DATA_DIR` to use another folder.
-* **Linux:** the same app runs on Linux. Tool names have no `.exe`; tools are found in `bin/` next to the app, then on `PATH`. MPI mode needs OpenMPI (`sudo apt install openmpi-bin`) and uses `mpirun`. Running from source on Linux needs Python 3.12+: with Python 3.11 the interpreter aborts on exit (`bool_dealloc`, a reference-count bug in a C extension that 3.12+ does not trip over).
+Bundled programs (in `bin/`, licences in `licenses/`):
 
-### 🧪 Tests
+| Program | Windows | Linux |
+| --- | --- | --- |
+| [PhyML](https://github.com/stephaneguindon/phyml) | 3.3, MPI build | 3.3.20260528, serial and MPI builds |
+| [IQ-TREE](https://github.com/iqtree/iqtree2) | 2.4.0 | 2.4.0 |
+| [MUSCLE](https://github.com/rcedgar/muscle) | 5.3 | 5.3 |
+| [RAxML-NG](https://github.com/amkozlov/raxml-ng) | 2.0.3, native build | 2.0.3 |
+
+RAxML-NG is included for use from the command line; an engine for it in the window is planned. The Windows build is made from the official sources with a small patch; the sources and the patch are attached to every release (AGPL-3.0).
+
+Settings and history are kept next to the program when that folder is writable, otherwise in `%APPDATA%\phymlGUI` (Windows) or `~/.config/phymlGUI` (Linux, `$XDG_CONFIG_HOME`). `PHYMLGUI_DATA_DIR` selects another folder.
+
+## Installation & Quick Start (from source)
+
+Requires **Python 3.11+** (**3.12+** on Linux: with 3.11 the interpreter aborts on exit, `bool_dealloc`, because of a reference-count bug in a C extension).
+
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python scripts/fetch_third_party.py --dest bin   # pinned, SHA256-verified programs
+python phymlgui.py
 ```
-pip install -r requirements.txt -r requirements-dev.txt
-python scripts/fetch_third_party.py --dest bin   # pinned IQ-TREE and MUSCLE (SHA256-verified)
+
+Programs are looked up in `bin/` next to the app, then on `PATH`; paths can also be set in Settings.
+
+Run the tests:
+
+```bash
+pip install -r requirements-dev.txt
 python -m pytest
 ```
-Analysis binaries are looked up in `bin/` and in the variables `PHYMLGUI_PHYML`, `PHYMLGUI_MPIEXEC`, `PHYMLGUI_IQTREE`, `PHYMLGUI_MUSCLE`, `PHYMLGUI_RAXML` (full path to the executable). Tests that need a missing binary are skipped. Markers: `needs_phyml`, `needs_mpi`, `needs_iqtree`, `needs_muscle`, `slow`; CI runs plain `python -m pytest -q -rs`; the tests whose binaries are not installed there are skipped. Tests never touch your real settings: they use an isolated data folder.
 
----
+Tests that need a missing program are skipped; `PHYMLGUI_PHYML`, `PHYMLGUI_MPIEXEC`, `PHYMLGUI_IQTREE`, `PHYMLGUI_MUSCLE` and `PHYMLGUI_RAXML` point them to specific executables. The tests never touch your real settings. `scripts/make_screenshots.py` regenerates the screenshots from real runs.
 
-<a name="russian"></a>
-## 🇷🇺 Русская версия
+## Output files
 
-**phymlGUI** — графический интерфейс для Windows, автоматизирующий построение филогенетических деревьев методом максимального правдоподобия.
+Next to each input file:
 
-### 🛠 Основные возможности
-* **Два движка:** **PhyML** (последовательно или MPI) и **IQ-TREE** (автоподбор модели ModelFinder, ультрабыстрый бутстреп) — переключение в настройках.
-* **Интегрированный пайплайн:** Автоматическое определение невыровненных последовательностей и запуск **MUSCLE** перед анализом.
-* **Параллельные вычисления (MPI):** Запуск через `mpirun`/`mpiexec`; MPI-бинарники определяются автоматически, некорректная конфигурация бутстрепа блокируется с пояснением.
-* **Пакетный режим:** Обработка папки FASTA-файлов — живая очередь со статусами, повтор неудавшихся, сводка N/M и автоматические отчёты `phymlgui_summary.csv` / `.xlsx`.
-* **Аппаратная осведомлённость:** Определение физических/логических ядер и живая строка состояния с загрузкой CPU — системы и дерева процессов анализа.
-* **Просмотрщик деревьев:** Прямоугольная/сланцевая/круговая раскладки, подсветка поддержек по порогу, сворачивание клад, рерутинг по outgroup, консенсус большинства из бутстреп-деревьев, сравнение топологий по Робинсону–Фаулдсу, экспорт PNG/SVG/PDF.
-* **История и пресеты:** каждый запуск записывается (двойной клик загружает его дерево); встроенные и пользовательские пресеты параметров.
-* **Консольный режим:** `python phymlgui.py --file data.fasta` / `--batch папка/` — тот же пайплайн без GUI. Настройки берутся из папки данных (а не из `phyml_config.json` в текущей папке); `--config preset.json` — JSON-объект, накладываемый поверх них. Коды выхода: 0 — успех, 1 — файл не обработан или запуск отменён, 2 — ошибка аргументов или входных данных.
-* **Очистка и конвертация:** санитарная очистка ID, перевод `FASTA` → `PHYLIP-relaxed`.
-* **Темы:** светлая/тёмная (могут следовать системной Windows) с выбором акцентного цвета.
+- `*_aligned.fasta`: the MUSCLE alignment (for unaligned input)
+- `*.phy`: the relaxed PHYLIP passed to the engine
+- `*_phyml_tree.txt`, `*_phyml_stats.txt`, `*_phyml_boot_trees.txt`: PhyML results
+- `*.treefile`, `*.iqtree`, `*.log`: IQ-TREE results
+- `phymlgui_summary.csv`, `phymlgui_summary.xlsx`: one row per file
 
-### ⚙️ Требования
-* **Программные файлы:** `phyml.exe` (или MPI-версия) и `muscle.exe`.
-* **Python-зависимости:** Python 3.11+ (под Linux 3.12+) с пакетами `PySide6`, `matplotlib`, `biopython` и `psutil` (`pip install -r requirements.txt`).
-* **Среда MPI:** PhyML под Windows требует установленный **Microsoft MPI** (инсталлятор `msmpisetup.exe` можно найти на официальном GitHub Microsoft), в том числе для последовательного режима: встроенный PhyML собран с MPI.
-* **Настройки и история:** хранятся рядом с exe, если папка доступна для записи, иначе в `%APPDATA%\phymlGUI` (Windows) или `~/.config/phymlGUI` (Linux, `$XDG_CONFIG_HOME`). Другую папку можно задать переменной `PHYMLGUI_DATA_DIR`.
-* **Linux:** то же приложение работает под Linux. Имена программ без `.exe`; они ищутся в `bin/` рядом с приложением, затем в `PATH`. Для MPI-режима нужен OpenMPI (`sudo apt install openmpi-bin`), используется `mpirun`. Для запуска из исходников под Linux нужен Python 3.12+: с Python 3.11 интерпретатор аварийно завершается при выходе (`bool_dealloc`, ошибка счётчика ссылок в C-расширении, на которую 3.12+ не натыкается).
+## Citation
 
-### 🧪 Тесты
-```
-pip install -r requirements.txt -r requirements-dev.txt
-python scripts/fetch_third_party.py --dest bin   # закреплённые IQ-TREE и MUSCLE (проверка SHA256)
-python -m pytest
-```
-Бинарники анализа ищутся в `bin/` и в переменных `PHYMLGUI_PHYML`, `PHYMLGUI_MPIEXEC`, `PHYMLGUI_IQTREE`, `PHYMLGUI_MUSCLE`, `PHYMLGUI_RAXML` (полный путь к exe). Тесты, которым нужен отсутствующий бинарник, пропускаются. Маркеры: `needs_phyml`, `needs_mpi`, `needs_iqtree`, `needs_muscle`, `slow`; CI запускает просто `python -m pytest -q -rs`; тесты, для которых на CI нет бинарников, пропускаются. Тесты не трогают ваши настройки: они работают в изолированной папке данных.
+If you use phymlGUI in published work, please cite the programs that did the analysis:
 
----
+- **PhyML:** Guindon S, Dufayard J-F, Lefort V, Anisimova M, Hordijk W, Gascuel O. New algorithms and methods to estimate maximum-likelihood phylogenies: assessing the performance of PhyML 3.0. *Systematic Biology* 59(3):307–321, 2010.
+- **IQ-TREE 2:** Minh BQ, Schmidt HA, Chernomor O, et al. IQ-TREE 2: new models and efficient methods for phylogenetic inference in the genomic era. *Molecular Biology and Evolution* 37(5):1530–1534, 2020.
+- **MUSCLE 5:** Edgar RC. Muscle5: high-accuracy alignment ensembles enable unbiased assessments of sequence homology and phylogeny. *Nature Communications* 13:6968, 2022.
 
-## 📂 Output Files / Выходные файлы
+## License
 
-* `*_aligned.fasta` — Aligned sequences / Выровненные последовательности.
-* `*.phy` — Prepared PHYLIP format / Подготовленный формат PHYLIP.
-* `*_phyml_tree.txt` — Resulting ML Tree (Newick) / Итоговое дерево (Newick).
-* `*_phyml_stats.txt` — Analysis statistics / Статистика анализа.
-* `phymlgui_summary.csv` — Per-file run summary (batch-friendly) / Сводка результатов по файлам.
-
-## Credits & Acknowledgments / Авторы и благодарности
-
-* **PhyML:** The core phylogenetic analysis is powered by [PhyML](https://github.com/stephaneguindon/phyml), developed by Stephane Guindon and his team.
-  * *Citation:* Guindon S, et al. "New Algorithms and Methods to Estimate Maximum-Likelihood Phylogenies: Assessing the Performance of PhyML 3.0." Systematic Biology, 2010.
-* **phymlGUI:** This wrapper/GUI was developed by Aleksey Drobin.
-
-### License
-This project is licensed under the MIT License, but the included binaries (`phyml-mpi.exe`) are subject to their own respective licenses (GPL).
+MIT License — Copyright (c) 2026 Aleksey Drobin ([@adrobi](https://github.com/adrobi)). The bundled programs keep their own licences: PhyML and MUSCLE GPL-3.0, IQ-TREE GPL-2.0, RAxML-NG AGPL-3.0 (see `licenses/` in the packages). Changes are listed in [CHANGELOG.md](CHANGELOG.md).

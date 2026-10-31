@@ -21,19 +21,38 @@ _spec = importlib.util.spec_from_file_location('package', os.path.join(ROOT, 'pa
 _package = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_package)
 
-NOTES = """phymlGUI {version}
+NOTES_DIR = os.path.join(ROOT, 'packaging', 'release_notes')
+TOOL_NAMES = {'phyml': 'PhyML', 'iqtree': 'IQ-TREE', 'muscle': 'MUSCLE', 'raxml': 'RAxML-NG'}
 
-Downloads:
-- `phymlGUI-{version}-windows-x64.zip` - unpack and start `phymlgui.exe`
-  (command line: `phymlgui-cli.exe`). PhyML needs Microsoft MPI
-  (also for serial runs: the bundled PhyML is an MPI build).
-- `phymlGUI-{version}-x86_64.AppImage` - `chmod +x` and run; without FUSE use
-  `--appimage-extract-and-run`. MPI mode needs OpenMPI (`sudo apt install openmpi-bin`).
-- `SHA256SUMS` - checksums of the files above.
-- `raxml-ng-2.0.3-source+patch.tar.gz` - RAxML-NG sources and the patch used for the
-  Windows build (AGPL-3.0).
+DOWNLOAD_EN = """### Download and requirements
 
-Bundled programs:
+- **Windows 10/11, 64-bit:** `phymlGUI-{version}-windows-x64.zip`. Unpack the whole archive and run `phymlgui.exe` (`phymlgui-cli.exe` for the command line). PhyML needs [Microsoft MPI](https://github.com/microsoft/Microsoft-MPI/releases) (`msmpisetup.exe`), also for serial runs: the bundled PhyML is an MPI build.
+- **Linux x86_64:** `phymlGUI-{version}-x86_64.AppImage`. Run `chmod +x` and start it; without FUSE add `--appimage-extract-and-run`. Needs glibc 2.35 or newer (Ubuntu 22.04+). MPI mode needs OpenMPI: `sudo apt install openmpi-bin`.
+- `SHA256SUMS`: checksums of the files, `sha256sum -c SHA256SUMS`.
+- `raxml-ng-2.0.3-source+patch.tar.gz`: RAxML-NG sources and the patch of the Windows build (AGPL-3.0).
+
+Python is not required.
+
+### Bundled programs
+
+| Program | Windows | Linux |
+| --- | --- | --- |
+{tools}
+"""
+
+DOWNLOAD_RU = """### Скачать и требования
+
+- **Windows 10/11, 64 бит:** `phymlGUI-{version}-windows-x64.zip`. Распакуйте архив целиком и запустите `phymlgui.exe` (`phymlgui-cli.exe` — для командной строки). PhyML требует [Microsoft MPI](https://github.com/microsoft/Microsoft-MPI/releases) (`msmpisetup.exe`), в том числе для последовательного режима: встроенный PhyML собран с MPI.
+- **Linux x86_64:** `phymlGUI-{version}-x86_64.AppImage`. Выполните `chmod +x` и запустите; без FUSE добавьте `--appimage-extract-and-run`. Нужен glibc 2.35 или новее (Ubuntu 22.04+). Для MPI-режима нужен OpenMPI: `sudo apt install openmpi-bin`.
+- `SHA256SUMS` — контрольные суммы файлов, `sha256sum -c SHA256SUMS`.
+- `raxml-ng-2.0.3-source+patch.tar.gz` — исходники RAxML-NG и патч сборки для Windows (AGPL-3.0).
+
+Python не нужен.
+
+### Программы в комплекте
+
+| Программа | Windows | Linux |
+| --- | --- | --- |
 {tools}
 """
 
@@ -54,12 +73,27 @@ def write_sha256sums(files, out):
             f.write(f'{digest}  {os.path.basename(path)}\n')
 
 
-def release_notes(version, manifest):
-    lines = []
-    for section, label in (('windows', 'Windows'), ('linux', 'Linux')):
-        for name, spec in manifest[section].items():
-            lines.append(f'- {label}: {name} {spec["version"]}')
-    return NOTES.format(version=version, tools='\n'.join(lines))
+def _highlights(version, suffix, notes_dir):
+    """packaging/release_notes/<X.Y.Z><suffix>; a pre-release uses its release's file."""
+    path = os.path.join(notes_dir, version.split('-')[0] + suffix)
+    if not os.path.isfile(path):
+        return ''
+    with open(path, encoding='utf-8') as f:
+        return f.read().strip() + '\n\n'
+
+
+def release_notes(version, manifest, notes_dir=NOTES_DIR):
+    """English, then Russian: the version's highlights, downloads and bundled programs."""
+    rows = []
+    for name, label in TOOL_NAMES.items():
+        # '2.0.3 (native build, ...)' -> '2.0.3': the build notes are in the text above
+        cells = [manifest[section].get(name, {}).get('version', '—').split(' (')[0]
+                 for section in ('windows', 'linux')]
+        rows.append(f'| {label} | {cells[0]} | {cells[1]} |')
+    tools = '\n'.join(rows)
+    english = _highlights(version, '.md', notes_dir) + DOWNLOAD_EN.format(version=version, tools=tools)
+    russian = _highlights(version, '.ru.md', notes_dir) + DOWNLOAD_RU.format(version=version, tools=tools)
+    return f'# phymlGUI {version}\n\n{english}\n---\n\n{russian}'
 
 
 def raxml_source_bundle(source_zip, patch, out):
