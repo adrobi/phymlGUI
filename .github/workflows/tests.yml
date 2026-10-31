@@ -80,7 +80,6 @@ jobs:
                   print(f'{name:30} n={n:4} dTrue={sys.getrefcount(True) - t0:+6} dFalse={sys.getrefcount(False) - f0:+6}')
           child.kill()
           EOF
-          sed -i 's/^          //' /tmp/refs.py
           python /tmp/refs.py
           true
       - name: Tests
