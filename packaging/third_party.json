@@ -27,8 +27,13 @@
       "version": "2.0.3 (native build, packaging/patches/raxml-ng-2.0.3-windows.patch)",
       "url": "https://github.com/amkozlov/raxml-ng/releases/download/2.0.3/raxml-ng_v2.0.3_source.zip",
       "sha256": "7cd3fa6b1de373777d688032c9ec6731078b67e6a812d7a1d779295d016843d2",
-      "build": ["bash", "packaging/build_raxml_windows.sh"],
-      "outputs": ["raxml-ng.exe"]
+      "build": [
+        "bash",
+        "packaging/build_raxml_windows.sh"
+      ],
+      "outputs": [
+        "raxml-ng.exe"
+      ]
     }
   },
   "linux": {
@@ -52,8 +57,14 @@
       "version": "3.3.20260528",
       "url": "https://github.com/stephaneguindon/phyml/archive/refs/tags/v3.3.20260528.tar.gz",
       "sha256": "42451c46de7cd01f8ca67d657766acf5b02f61027127bdda87efe3cdb422b297",
-      "build": ["bash", "packaging/build_phyml_linux.sh"],
-      "outputs": ["phyml", "phyml-mpi"]
+      "build": [
+        "bash",
+        "packaging/build_phyml_linux.sh"
+      ],
+      "outputs": [
+        "phyml",
+        "phyml-mpi"
+      ]
     },
     "raxml": {
       "version": "2.0.3",
@@ -63,6 +74,21 @@
         "raxml-ng": "raxml-ng"
       },
       "mode": "755"
+    }
+  },
+  "build_tools": {
+    "appimagetool": {
+      "version": "1.9.1",
+      "url": "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage",
+      "sha256": "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0",
+      "save_as": "appimagetool",
+      "mode": "755"
+    },
+    "appimage_runtime": {
+      "version": "20251108",
+      "url": "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64",
+      "sha256": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
+      "save_as": "runtime-x86_64"
     }
   }
 }

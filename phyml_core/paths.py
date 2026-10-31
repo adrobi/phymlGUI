@@ -113,7 +113,7 @@ class AppPaths:
         override = env.get(DATA_DIR_ENV)
         if override:
             data = override
-        elif is_writable(app):
+        elif not env.get('APPIMAGE') and is_writable(app):   # an AppImage's folder is throwaway
             data = app
         elif platform == 'nt':
             base = env.get('APPDATA') or os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming')

@@ -98,6 +98,41 @@ def build_windows(version, bin_dir, out_dir):
         return out
 
 
+def build_appdir(version, bin_dir, out_dir):
+    """An AppDir in out_dir: AppRun, .desktop, icon, usr/bin/{phymlgui, _internal, bin/}."""
+    appdir = os.path.join(out_dir, 'phymlGUI.AppDir')
+    shutil.rmtree(appdir, ignore_errors=True)
+    os.makedirs(out_dir, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='phymlgui_pkg_') as work:
+        bundle = _pyinstaller_bundle(version, work)
+        usr_bin = os.path.join(appdir, 'usr', 'bin')
+        shutil.copytree(bundle, usr_bin)
+    _copy_tools(bin_dir, os.path.join(usr_bin, 'bin'))
+    for name in os.listdir(os.path.join(usr_bin, 'bin')):
+        os.chmod(os.path.join(usr_bin, 'bin', name), 0o755)
+    shutil.copytree(os.path.join(ROOT, 'packaging', 'licenses'),
+                    os.path.join(appdir, 'usr', 'share', 'licenses', 'phymlgui'))
+    apprun = os.path.join(appdir, 'AppRun')
+    shutil.copy2(os.path.join(ROOT, 'packaging', 'appimage', 'AppRun'), apprun)
+    os.chmod(apprun, 0o755)
+    shutil.copy2(os.path.join(ROOT, 'packaging', 'appimage', 'phymlgui.desktop'), appdir)
+    shutil.copy2(os.path.join(ROOT, 'icon.png'), os.path.join(appdir, 'phymlgui.png'))
+    return appdir
+
+
+def build_appimage(version, bin_dir, out_dir, appimagetool, runtime=None):
+    """phymlGUI-<version>-x86_64.AppImage built by the pinned appimagetool (and runtime)."""
+    if not appimagetool:
+        raise ValueError('--appimagetool is required for linux')
+    appdir = build_appdir(version, bin_dir, out_dir)
+    out = os.path.join(out_dir, f'phymlGUI-{version}-x86_64.AppImage')
+    command = [appimagetool, '--appimage-extract-and-run']   # no FUSE needed on CI
+    if runtime:
+        command += ['--runtime-file', runtime]
+    subprocess.run([*command, appdir, out], check=True, env=dict(os.environ, ARCH='x86_64'))
+    return out
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('platform', choices=['windows', 'linux'])
@@ -105,11 +140,12 @@ def main(argv=None):
     parser.add_argument('--bin', required=True, help='folder with the analysis programs')
     parser.add_argument('--out', default='dist')
     parser.add_argument('--appimagetool', help='path to appimagetool (linux)')
+    parser.add_argument('--runtime', help='path to the pinned AppImage runtime (linux)')
     args = parser.parse_args(argv)
     if args.platform == 'windows':
         out = build_windows(args.version, args.bin, args.out)
     else:
-        out = build_appimage(args.version, args.bin, args.out, args.appimagetool)
+        out = build_appimage(args.version, args.bin, args.out, args.appimagetool, args.runtime)
     print(out)
     return 0
 

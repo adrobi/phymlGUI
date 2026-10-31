@@ -66,3 +66,12 @@ def test_windows_config_loads_on_linux(tmp_path, monkeypatch):
     assert cfg['mpirun_path'] == 'mpirun'
     issues = PhyML().validate(dict(cfg, mpi_np='2'), paths)
     assert issues and issues[0].key == 'val_no_exe'
+
+
+def test_detect_never_uses_app_dir_inside_an_appimage(tmp_path):
+    """--appimage-extract-and-run unpacks into a writable temp folder; settings must
+    still go to ~/.config/phymlGUI, not into that throwaway folder."""
+    p = AppPaths.detect(env={'APPIMAGE': '/home/u/phymlGUI.AppImage', 'HOME': str(tmp_path)},
+                        is_writable=lambda d: True, app_dir=str(tmp_path / 'squashfs-root' / 'usr' / 'bin'),
+                        platform='posix')
+    assert p.data_dir == str(tmp_path / '.config' / 'phymlGUI')

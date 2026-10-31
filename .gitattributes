@@ -1,3 +1,5 @@
 # patches are applied to upstream LF sources: never convert their line endings
 *.patch text eol=lf
 *.sh text eol=lf
+packaging/appimage/AppRun text eol=lf
+*.desktop text eol=lf
