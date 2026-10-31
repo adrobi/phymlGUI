@@ -3,6 +3,7 @@ import os
 import shutil
 
 import pytest
+from phyml_core.utils import default_mpirun, exe_name
 from conftest import DATA, ROOT
 
 from phyml_core.engines import ENGINES
@@ -27,7 +28,7 @@ def paths(tmp_path):
 @pytest.fixture
 def exe(tmp_path):
     """An existing IQ-TREE-looking file outside bin/."""
-    path = tmp_path / 'iqtree2.exe'
+    path = tmp_path / exe_name('iqtree2')
     path.write_bytes(b'')
     return str(path)
 
@@ -166,7 +167,7 @@ def test_executable_prefers_the_configured_file(paths, exe):
 
 
 def test_executable_falls_back_to_bin(paths):
-    bin_exe = os.path.join(paths.bin_dir, 'iqtree2.exe')
+    bin_exe = os.path.join(paths.bin_dir, exe_name('iqtree2'))
     os.makedirs(paths.bin_dir)
     open(bin_exe, 'wb').close()
     assert IqTree().executable({'iqtree_path': ''}, paths) == bin_exe
@@ -208,7 +209,7 @@ def test_validate_empty_path_without_bin_reports_the_missing_exe(paths):
 
 def test_validate_uses_the_bin_fallback(paths):
     os.makedirs(paths.bin_dir)
-    open(os.path.join(paths.bin_dir, 'iqtree2.exe'), 'wb').close()
+    open(os.path.join(paths.bin_dir, exe_name('iqtree2')), 'wb').close()
     assert IqTree().validate(dict(Q, iqtree_path=''), paths) == []
 
 

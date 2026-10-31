@@ -25,7 +25,8 @@
 * **Executables:** `phyml.exe` (or MPI version) and `muscle.exe`.
 * **Python packages:** Python 3.11+ with `PySide6`, `matplotlib`, `biopython` and `psutil` (`pip install -r requirements.txt`).
 * **MPI Environment:** For parallel mode, **Microsoft MPI** is required (install `msmpisetup.exe` from the official Microsoft GitHub).
-* **Settings and history:** stored next to the exe when that folder is writable, otherwise in `%APPDATA%\phymlGUI`. Set `PHYMLGUI_DATA_DIR` to use another folder.
+* **Settings and history:** stored next to the exe when that folder is writable, otherwise in `%APPDATA%\phymlGUI` (Windows) or `~/.config/phymlGUI` (Linux, `$XDG_CONFIG_HOME`). Set `PHYMLGUI_DATA_DIR` to use another folder.
+* **Linux:** the same app runs on Linux. Tool names have no `.exe`; tools are found in `bin/` next to the app, then on `PATH`. MPI mode needs OpenMPI (`sudo apt install openmpi-bin`) and uses `mpirun`.
 
 ### 🧪 Tests
 ```
@@ -58,7 +59,8 @@ Analysis binaries are looked up in `bin/` and in the variables `PHYMLGUI_PHYML`,
 * **Программные файлы:** `phyml.exe` (или MPI-версия) и `muscle.exe`.
 * **Python-зависимости:** Python 3.11+ с пакетами `PySide6`, `matplotlib`, `biopython` и `psutil` (`pip install -r requirements.txt`).
 * **Среда MPI:** Для работы в параллельном режиме требуется установленный **Microsoft MPI** (инсталлятор `msmpisetup.exe` можно найти на официальном GitHub Microsoft).
-* **Настройки и история:** хранятся рядом с exe, если папка доступна для записи, иначе в `%APPDATA%\phymlGUI`. Другую папку можно задать переменной `PHYMLGUI_DATA_DIR`.
+* **Настройки и история:** хранятся рядом с exe, если папка доступна для записи, иначе в `%APPDATA%\phymlGUI` (Windows) или `~/.config/phymlGUI` (Linux, `$XDG_CONFIG_HOME`). Другую папку можно задать переменной `PHYMLGUI_DATA_DIR`.
+* **Linux:** то же приложение работает под Linux. Имена программ без `.exe`; они ищутся в `bin/` рядом с приложением, затем в `PATH`. Для MPI-режима нужен OpenMPI (`sudo apt install openmpi-bin`), используется `mpirun`.
 
 ### 🧪 Тесты
 ```
