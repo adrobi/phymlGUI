@@ -3,11 +3,12 @@
     python phymlgui.py --file input.fasta
     python phymlgui.py --batch folder/ --config preset.json
 
-Settings come from the user's config file (as in the window); --config is a JSON object
-laid over them. Log lines go to stdout, except level 'error' lines, which go to stderr.
+Settings come from the config file in the data folder (as in the window; the working
+folder is not consulted); --config is a JSON object laid over them. A damaged config file
+is reported on stderr and the defaults are used, as in the window. Log lines go to stdout, except level 'error' lines, which go to stderr.
 Exit codes: 0 - every file succeeded; 1 - a file failed or the run was cancelled;
-2 - usage or input problem (no --file/--batch, missing path, empty folder, unreadable
-or invalid settings/--config).
+2 - usage or input problem (no --file/--batch, missing path, empty folder, no usable
+data folder, unreadable settings, unreadable or invalid --config).
 """
 import argparse
 import json
@@ -69,7 +70,9 @@ def _collect_files(args):
 
 def _load_params(paths, config_arg):
     try:
-        params = settings.from_disk(settings.load(paths.config_file), paths)
+        raw = settings.load(paths.config_file,
+                            on_error=lambda message: _emit(sys.stderr, message))
+        params = settings.resolve_cores(settings.from_disk(raw, paths))
     except OSError as e:
         raise _Usage(f'{paths.config_file}: {e}') from e
     if config_arg:
@@ -96,7 +99,10 @@ def main(argv=None) -> int:
         if not args.file and not args.batch:
             parser.error('specify --file or --batch')
         files = _collect_files(args)
-        paths = AppPaths.detect()
+        try:
+            paths = AppPaths.detect()
+        except OSError as e:
+            raise _Usage(str(e)) from e
         params = _load_params(paths, args.config)
     except _Usage as e:
         _emit(sys.stderr, str(e))

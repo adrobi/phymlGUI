@@ -249,7 +249,7 @@ class PhyMLApp(QWidget):
         self.update_models()
         raw, clean = self.settings_store.load()
         try:
-            self._apply_config(settings.from_disk(raw, self.paths))
+            self._apply_config(settings.resolve_cores(settings.from_disk(raw, self.paths)))
             if clean and os.path.isfile(self.paths.config_file):
                 self._log('system', _t("sys_load"))
         except Exception as e:
@@ -270,7 +270,7 @@ class PhyMLApp(QWidget):
         self.muscle_path_input.setText(config["muscle_path"])
         self.update_models()
         self.params.set_params(dict(presets.extract(config), use_mpi=config["use_mpi"],
-                                    mpi_np=config["mpi_np"] or str(self.phys_cores)))  # '' = cores
+                                    mpi_np=config["mpi_np"]))
         self.chk_show_tree.setChecked(config["show_tree"])
         self._recent = [p for p in config["recent"] if isinstance(p, str) and os.path.exists(p)]
         self.nav.set_recent(self._recent)
@@ -408,7 +408,7 @@ class PhyMLApp(QWidget):
         try:
             self.history_store.append(rec)
         except OSError as e:
-            self._log('error', _t('err_settings_save').format(e))
+            self._log('error', _t('err_history_save').format(e))
         self._refresh_history()
 
     def _refresh_history(self):

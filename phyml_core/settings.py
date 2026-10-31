@@ -8,6 +8,7 @@ from typing import Callable, List, Optional
 
 from .i18n import _t
 from .paths import CONFIG_NAME, HISTORY_NAME, AppPaths
+from .utils import detect_cores
 
 SCHEMA_VERSION = 2
 
@@ -152,6 +153,15 @@ def from_disk(cfg: dict, paths: AppPaths) -> dict:
         out[key] = paths.from_stored(value)
     if isinstance(out.get('recent'), list):
         out['recent'] = [paths.from_stored(p) if isinstance(p, str) else p for p in out['recent']]
+    return out
+
+
+def resolve_cores(cfg: dict) -> dict:
+    """A copy of cfg where an empty mpi_np ('' = "not chosen yet") becomes the number of
+    physical cores. The window and the CLI both call this before using the settings."""
+    out = dict(cfg)
+    if not str(out.get('mpi_np') or '').strip():
+        out['mpi_np'] = str(detect_cores()[0])
     return out
 
 

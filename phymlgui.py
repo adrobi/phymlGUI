@@ -12,8 +12,13 @@ def main():
         sys.exit(cli_main())
     from PySide6.QtWidgets import QApplication
     from phyml_ui.main_window import PhyMLApp
+    from PySide6.QtWidgets import QMessageBox
     app = QApplication(sys.argv)
-    window = PhyMLApp()
+    try:
+        window = PhyMLApp()
+    except OSError as e:   # e.g. the data folder cannot be created
+        QMessageBox.critical(None, 'phymlGUI', str(e))
+        sys.exit(1)
     window.show()
     sys.exit(app.exec())
 

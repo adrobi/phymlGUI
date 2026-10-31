@@ -19,7 +19,7 @@ MANIFEST = os.path.join(ROOT, 'packaging', 'third_party.json')
 
 def _download(url, target):
     sha = hashlib.sha256()
-    with urllib.request.urlopen(url) as resp, open(target, 'wb') as out:
+    with urllib.request.urlopen(url, timeout=120) as resp, open(target, 'wb') as out:
         while True:
             chunk = resp.read(1024 * 1024)
             if not chunk:

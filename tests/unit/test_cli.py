@@ -128,3 +128,71 @@ def test_cli_config_overlay_and_batch_selection(tmp_path, monkeypatch):
     assert [os.path.basename(p) for p in inst.files] == ['a.fasta', 'b.FA', 'c.fas']
     assert inst.params['model'] == 'GTR'
     assert inst.params['engine'] == 'phyml'
+
+
+def test_cli_empty_mpi_np_becomes_physical_cores(tmp_path, monkeypatch):
+    """A fresh machine has no config: the runner must get a real np, not ''."""
+    from phyml_core.utils import detect_cores
+    _Fake.instances.clear()
+    monkeypatch.setattr(cli, 'PipelineRunner', _Fake)
+    f = tmp_path / 'a.fasta'
+    f.write_text('>a\nA\n')
+    assert cli.main(['--file', str(f), '--config', _write(tmp_path, {'engine': 'iqtree'})]) == 0
+    params = _Fake.instances[0].params
+    assert params['engine'] == 'iqtree'
+    assert params['mpi_np'] == str(detect_cores()[0])
+
+
+def _write(tmp_path, obj):
+    path = tmp_path / 'overlay.json'
+    path.write_text(json.dumps(obj))
+    return str(path)
+
+
+def test_cli_damaged_config_is_reported_on_stderr_and_defaults_are_used(tmp_path, monkeypatch, capsys):
+    from phyml_core.i18n import _t
+    _Fake.instances.clear()
+    monkeypatch.setattr(cli, 'PipelineRunner', _Fake)
+    data = tmp_path / 'data'
+    data.mkdir()
+    (data / 'phyml_config.json').write_text('{not json')
+    f = tmp_path / 'a.fasta'
+    f.write_text('>a\nA\n')
+    assert cli.main(['--file', str(f)]) == 0
+    assert _t('err_settings_broken').split('{}')[0] in capsys.readouterr().err
+    assert _Fake.instances[0].params['model'] == 'HKY85'
+
+
+def test_cli_unusable_data_dir_exit_2_without_traceback(tmp_path, monkeypatch, capsys):
+    blocker = tmp_path / 'file'
+    blocker.write_text('x')
+    monkeypatch.setenv('PHYMLGUI_DATA_DIR', str(blocker / 'sub'))
+    f = tmp_path / 'a.fasta'
+    f.write_text('>a\nA\n')
+    assert cli.main(['--file', str(f)]) == 2
+    err = capsys.readouterr().err
+    assert err and 'Traceback' not in err
+
+
+def test_gui_start_shows_a_message_box_when_the_data_folder_fails(tmp_path):
+    """Run in a subprocess: it creates its own QApplication."""
+    code = '\n'.join([
+        "import sys",
+        "from PySide6.QtWidgets import QMessageBox",
+        "from phyml_core.paths import AppPaths",
+        "shown = []",
+        "def boom(cls, *a, **k): raise PermissionError(13, 'no data folder')",
+        "AppPaths.detect = classmethod(boom)",
+        "QMessageBox.critical = lambda *a, **k: shown.append(a[-1])",
+        "sys.argv = ['phymlgui.py']",
+        "import phymlgui",
+        "try:",
+        "    phymlgui.main()",
+        "except SystemExit as e:",
+        "    print('EXIT', e.code, shown)",
+    ])
+    env = _env(tmp_path)
+    env['QT_QPA_PLATFORM'] = 'offscreen'
+    r = subprocess.run([sys.executable, '-c', code], cwd=ROOT, env=env,
+                       capture_output=True, text=True, timeout=60)
+    assert 'EXIT 1' in r.stdout and 'no data folder' in r.stdout, r.stdout + r.stderr

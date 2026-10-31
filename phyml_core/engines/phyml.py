@@ -73,7 +73,7 @@ class PhyML(Engine):
             issues.append(Issue('error', 'mpi_boot_msg'))
 
         if use_mpi:
-            mpiexec = param_text(params, 'mpirun_path', 'mpiexec')
+            mpiexec = param_text(params, 'mpirun_path', 'mpiexec') or 'mpiexec'
             if not _mpiexec_found(mpiexec):
                 issues.append(Issue('error', 'val_no_mpiexec', (mpiexec,)))
 
@@ -135,5 +135,5 @@ class PhyML(Engine):
         """Call validate() first: a bad mpi_np raises ValueError here."""
         if not params.get('use_mpi', False):
             return Native()
-        mpiexec = param_text(params, 'mpirun_path', 'mpiexec')
+        mpiexec = param_text(params, 'mpirun_path', 'mpiexec') or 'mpiexec'
         return Mpi((mpiexec and shutil.which(mpiexec)) or mpiexec, int(param_text(params, 'mpi_np', '2')))

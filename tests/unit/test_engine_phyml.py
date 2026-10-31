@@ -401,6 +401,16 @@ def test_validate_mpiexec_present_as_a_file_or_a_command_name(paths, exe, tmp_pa
     assert PhyML().validate(dict(params, mpirun_path='mpiexec'), paths) == []
 
 
+@pytest.mark.parametrize('blank', ['', '   '])
+def test_blank_mpirun_path_falls_back_to_mpiexec(paths, exe, monkeypatch, blank):
+    monkeypatch.setattr(shutil, 'which', lambda name, *a, **k: 'C:/MS/mpiexec.exe' if name == 'mpiexec' else None)
+    params = dict(P, phyml_path=exe, use_mpi=True, mpirun_path=blank, mpi_np='3')
+    assert PhyML().validate(params, paths) == []
+    assert PhyML().launcher(params) == Mpi('C:/MS/mpiexec.exe', 3)
+    monkeypatch.setattr(shutil, 'which', lambda *a, **k: None)
+    assert PhyML().validate(params, paths) == [Issue('error', 'val_no_mpiexec', ('mpiexec',))]
+
+
 def test_validate_mpiexec_is_not_checked_when_mpi_is_off(paths, exe, monkeypatch):
     monkeypatch.setattr(shutil, 'which', lambda *a, **k: None)
     assert PhyML().validate(dict(P, phyml_path=exe, use_mpi=False, mpirun_path='nowhere'), paths) == []

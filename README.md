@@ -17,7 +17,7 @@
 * **Hardware Awareness:** Physical/logical core detection (the `np` field is pre-filled), plus a live CPU status bar showing both system load and the utilization of the analysis process tree.
 * **Tree Viewer:** Rectangular / slanted / circular layouts, support-value threshold highlighting, clade collapsing, outgroup rerooting, majority-rule consensus from bootstrap trees, Robinson–Foulds topology comparison and PNG/SVG/PDF export.
 * **Run History and Presets:** every run is recorded (double-click reloads its tree); built-in and user parameter presets.
-* **Headless CLI:** `python phymlgui.py --file data.fasta` / `--batch folder/` runs the same pipeline without the GUI.
+* **Headless CLI:** `python phymlgui.py --file data.fasta` / `--batch folder/` runs the same pipeline without the GUI. Settings come from the data folder (not from a `phyml_config.json` in the current directory); `--config preset.json` is a JSON object laid over them. Exit codes: 0 success, 1 a file failed or the run was cancelled, 2 usage or input problem.
 * **Data Sanitization / Conversion:** cleans sequence IDs, converts `FASTA` to `PHYLIP-relaxed`.
 * **Themes:** light/dark (can follow the Windows system theme) with a selectable accent color.
 
@@ -33,7 +33,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 python scripts/fetch_third_party.py --dest bin   # pinned IQ-TREE and MUSCLE (SHA256-verified)
 python -m pytest
 ```
-Analysis binaries are looked up in `bin/` and in the variables `PHYMLGUI_PHYML`, `PHYMLGUI_MPIEXEC`, `PHYMLGUI_IQTREE`, `PHYMLGUI_MUSCLE`, `PHYMLGUI_RAXML` (full path to the executable). Tests that need a missing binary are skipped. Markers: `needs_phyml`, `needs_mpi`, `needs_iqtree`, `needs_muscle`, `slow`; e.g. `python -m pytest -m "not needs_phyml and not needs_mpi"` is what CI runs without PhyML/MPI. Tests never touch your real settings: they use an isolated data folder.
+Analysis binaries are looked up in `bin/` and in the variables `PHYMLGUI_PHYML`, `PHYMLGUI_MPIEXEC`, `PHYMLGUI_IQTREE`, `PHYMLGUI_MUSCLE`, `PHYMLGUI_RAXML` (full path to the executable). Tests that need a missing binary are skipped. Markers: `needs_phyml`, `needs_mpi`, `needs_iqtree`, `needs_muscle`, `slow`; CI runs plain `python -m pytest -q -rs`; the tests whose binaries are not installed there are skipped. Tests never touch your real settings: they use an isolated data folder.
 
 ---
 
@@ -50,7 +50,7 @@ Analysis binaries are looked up in `bin/` and in the variables `PHYMLGUI_PHYML`,
 * **Аппаратная осведомлённость:** Определение физических/логических ядер и живая строка состояния с загрузкой CPU — системы и дерева процессов анализа.
 * **Просмотрщик деревьев:** Прямоугольная/сланцевая/круговая раскладки, подсветка поддержек по порогу, сворачивание клад, рерутинг по outgroup, консенсус большинства из бутстреп-деревьев, сравнение топологий по Робинсону–Фаулдсу, экспорт PNG/SVG/PDF.
 * **История и пресеты:** каждый запуск записывается (двойной клик загружает его дерево); встроенные и пользовательские пресеты параметров.
-* **Консольный режим:** `python phymlgui.py --file data.fasta` / `--batch папка/` — тот же пайплайн без GUI.
+* **Консольный режим:** `python phymlgui.py --file data.fasta` / `--batch папка/` — тот же пайплайн без GUI. Настройки берутся из папки данных (а не из `phyml_config.json` в текущей папке); `--config preset.json` — JSON-объект, накладываемый поверх них. Коды выхода: 0 — успех, 1 — файл не обработан или запуск отменён, 2 — ошибка аргументов или входных данных.
 * **Очистка и конвертация:** санитарная очистка ID, перевод `FASTA` → `PHYLIP-relaxed`.
 * **Темы:** светлая/тёмная (могут следовать системной Windows) с выбором акцентного цвета.
 
@@ -66,7 +66,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 python scripts/fetch_third_party.py --dest bin   # закреплённые IQ-TREE и MUSCLE (проверка SHA256)
 python -m pytest
 ```
-Бинарники анализа ищутся в `bin/` и в переменных `PHYMLGUI_PHYML`, `PHYMLGUI_MPIEXEC`, `PHYMLGUI_IQTREE`, `PHYMLGUI_MUSCLE`, `PHYMLGUI_RAXML` (полный путь к exe). Тесты, которым нужен отсутствующий бинарник, пропускаются. Маркеры: `needs_phyml`, `needs_mpi`, `needs_iqtree`, `needs_muscle`, `slow`; например `python -m pytest -m "not needs_phyml and not needs_mpi"` — запуск CI без PhyML/MPI. Тесты не трогают ваши настройки: они работают в изолированной папке данных.
+Бинарники анализа ищутся в `bin/` и в переменных `PHYMLGUI_PHYML`, `PHYMLGUI_MPIEXEC`, `PHYMLGUI_IQTREE`, `PHYMLGUI_MUSCLE`, `PHYMLGUI_RAXML` (полный путь к exe). Тесты, которым нужен отсутствующий бинарник, пропускаются. Маркеры: `needs_phyml`, `needs_mpi`, `needs_iqtree`, `needs_muscle`, `slow`; CI запускает просто `python -m pytest -q -rs`; тесты, для которых на CI нет бинарников, пропускаются. Тесты не трогают ваши настройки: они работают в изолированной папке данных.
 
 ---
 

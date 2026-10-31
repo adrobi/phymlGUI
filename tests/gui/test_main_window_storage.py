@@ -194,6 +194,10 @@ def test_empty_mpi_np_means_physical_cores(data_dir, make_window, stored, shown)
     assert w.params.le_mpi_np.text() == (shown or str(detect_cores()[0]))
 
 
+def test_no_config_shows_physical_cores_for_mpi_np(window):
+    assert window.params.le_mpi_np.text() == str(detect_cores()[0])
+
+
 def test_bare_mpiexec_is_resolved_through_path(data_dir, make_window, monkeypatch):
     found = str(data_dir / 'bin' / 'mpiexec.exe')
     monkeypatch.setattr(shutil, 'which', lambda name: found if name == 'mpiexec' else None)
@@ -330,7 +334,8 @@ def test_history_write_error_is_logged_without_crash(window, monkeypatch):
     monkeypatch.setattr(HistoryStore, 'append', raising(OSError('disk full')))
     finish_run(window, ['x.fasta'], file_result('x.fasta'))
     assert 'disk full' in log_text(window)
-    assert _t('err_settings_save').split('{}')[0] in log_text(window)
+    assert _t('err_history_save').split('{}')[0] in log_text(window)
+    assert _t('err_settings_save').split('{}')[0] not in log_text(window)
 
 
 def test_unreadable_history_is_logged_without_crash(data_dir, make_window, monkeypatch):
