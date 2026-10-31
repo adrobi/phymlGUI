@@ -1,17 +1,68 @@
 {
-  "iqtree": {
-    "version": "2.4.0",
-    "url": "https://github.com/iqtree/iqtree2/releases/download/v2.4.0/iqtree-2.4.0-Windows.zip",
-    "sha256": "93f488a6cfef96ef664b23fefe5be97c2c80ebcae9cd2031c0cac92b467278be",
-    "extract": {
-      "iqtree-2.4.0-Windows/bin/iqtree2.exe": "iqtree2.exe",
-      "iqtree-2.4.0-Windows/bin/libiomp5md.dll": "libiomp5md.dll"
+  "windows": {
+    "iqtree": {
+      "version": "2.4.0",
+      "url": "https://github.com/iqtree/iqtree2/releases/download/v2.4.0/iqtree-2.4.0-Windows.zip",
+      "sha256": "93f488a6cfef96ef664b23fefe5be97c2c80ebcae9cd2031c0cac92b467278be",
+      "extract": {
+        "iqtree-2.4.0-Windows/bin/iqtree2.exe": "iqtree2.exe",
+        "iqtree-2.4.0-Windows/bin/libiomp5md.dll": "libiomp5md.dll"
+      }
+    },
+    "muscle": {
+      "version": "5.3",
+      "url": "https://github.com/rcedgar/muscle/releases/download/v5.3/muscle-win64.v5.3.exe",
+      "sha256": "a86637db99deb3efa1cb6762c4e3160ca33644608270eb167e4214f1f9409711",
+      "save_as": "muscle.exe"
+    },
+    "phyml": {
+      "version": "3.3 (MS-MPI build from phymlGUI v1.2)",
+      "url": "https://github.com/adrobi/phymlGUI/releases/download/v1.2/phymlGUI-1.2-win64.zip",
+      "sha256": "4258578f2772fe5958513275cd7a64b6230d90795477b55ab156487bf0b08459",
+      "extract": {
+        "phymlGUI-1.2/phyml-mpi.exe": "phyml-mpi.exe"
+      }
+    },
+    "raxml": {
+      "version": "2.0.3 (native build, packaging/patches/raxml-ng-2.0.3-windows.patch)",
+      "url": "https://github.com/amkozlov/raxml-ng/releases/download/2.0.3/raxml-ng_v2.0.3_source.zip",
+      "sha256": "7cd3fa6b1de373777d688032c9ec6731078b67e6a812d7a1d779295d016843d2",
+      "build": ["bash", "packaging/build_raxml_windows.sh"],
+      "outputs": ["raxml-ng.exe"]
     }
   },
-  "muscle": {
-    "version": "5.3",
-    "url": "https://github.com/rcedgar/muscle/releases/download/v5.3/muscle-win64.v5.3.exe",
-    "sha256": "a86637db99deb3efa1cb6762c4e3160ca33644608270eb167e4214f1f9409711",
-    "save_as": "muscle.exe"
+  "linux": {
+    "iqtree": {
+      "version": "2.4.0",
+      "url": "https://github.com/iqtree/iqtree2/releases/download/v2.4.0/iqtree-2.4.0-Linux-intel.tar.gz",
+      "sha256": "49c58e26f192dd5e0045110cee0af151203dfa0bd79fa03d01fcfc3e44ca2f1b",
+      "extract": {
+        "iqtree-2.4.0-Linux-intel/bin/iqtree2": "iqtree2"
+      },
+      "mode": "755"
+    },
+    "muscle": {
+      "version": "5.3",
+      "url": "https://github.com/rcedgar/muscle/releases/download/v5.3/muscle-linux-x86.v5.3",
+      "sha256": "318abeb951d786a3e2532714cc81ad3b3d8f79a2b517dc31316eeb5b694db2bc",
+      "save_as": "muscle",
+      "mode": "755"
+    },
+    "phyml": {
+      "version": "3.3.20260528",
+      "url": "https://github.com/stephaneguindon/phyml/archive/refs/tags/v3.3.20260528.tar.gz",
+      "sha256": "42451c46de7cd01f8ca67d657766acf5b02f61027127bdda87efe3cdb422b297",
+      "build": ["bash", "packaging/build_phyml_linux.sh"],
+      "outputs": ["phyml", "phyml-mpi"]
+    },
+    "raxml": {
+      "version": "2.0.3",
+      "url": "https://github.com/amkozlov/raxml-ng/releases/download/2.0.3/raxml-ng_v2.0.3_linux_x86_64.zip",
+      "sha256": "d660cebe2a083de6c20d9354968803b8fd10be206f625be2393997d0abe98105",
+      "extract": {
+        "raxml-ng": "raxml-ng"
+      },
+      "mode": "755"
+    }
   }
 }
