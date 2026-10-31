@@ -16,3 +16,7 @@ asset_resp.json
 /bin/
 /build-bin/
 /build-parity-*/
+
+# Local working notes, not published
+concept.ru.md
+docs/superpowers/

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build a native, self-contained raxml-ng.exe (Windows x64) from the official
-# source zip with the patch from docs/superpowers/spikes/2026-10-24-raxml-ng-windows.
+# source zip with packaging/patches/raxml-ng-2.0.3-windows.patch.
 # Run inside MSYS2 UCRT64 (mingw-w64-ucrt-x86_64-{gcc,cmake,ninja}).
 # Usage: build_raxml_windows.sh <raxml-ng_v2.0.3_source.zip> <dest>
 set -euo pipefail
