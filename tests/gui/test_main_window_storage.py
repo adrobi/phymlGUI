@@ -206,6 +206,8 @@ def test_bare_mpiexec_is_resolved_through_path(data_dir, make_window, monkeypatc
 
 
 def test_bare_mpiexec_kept_when_not_found(data_dir, make_window, monkeypatch):
+    from phyml_core import utils
+    monkeypatch.setattr(utils, 'IS_WINDOWS', True)   # Windows semantics: mpiexec stays
     monkeypatch.setattr(shutil, 'which', lambda name: None)
     w = make_window()
     assert w.mpirun_path_input.text() == 'mpiexec'

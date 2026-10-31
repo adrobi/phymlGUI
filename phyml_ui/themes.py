@@ -31,7 +31,20 @@ def system_theme():
                 return 'dark' if value == 0 else 'light'
         except OSError:
             pass
-    return 'light'
+        return 'light'
+    return _palette_theme()
+
+
+def _palette_theme():
+    """'dark' when the desktop's Qt palette has a dark window colour (Linux)."""
+    try:
+        from PySide6.QtGui import QGuiApplication
+    except ImportError:
+        return 'light'
+    app = QGuiApplication.instance()
+    if app is None:
+        return 'light'
+    return 'dark' if app.palette().window().color().lightness() < 128 else 'light'
 
 
 def system_accent():

@@ -13,7 +13,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Callable, List, Literal, Mapping, Optional, Tuple
 
-from . import alignment
+from . import alignment, utils
 from .alignment import AlignmentError
 from .engines import ENGINES
 from .engines.base import Engine, format_issue, param_text
@@ -29,7 +29,7 @@ except ImportError:   # a hard dependency (requirements.txt); kill_process_tree 
 LEVELS = ('error', 'success', 'system', 'out')
 STATUSES = ('pending', 'running', 'ok', 'fail', 'cancelled')
 STAT_KEYS = ('model', 'taxa', 'lnL', 'gamma', 'tstv', 'time')
-MUSCLE_NAMES = ('muscle.exe',)
+MUSCLE_BASES = ('muscle',)
 KILL_TIMEOUT = 3.0   # seconds between terminate and kill
 
 _CREATION_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
@@ -218,7 +218,7 @@ class PipelineRunner:
 
     def _align(self, fasta: str) -> str:
         """Run MUSCLE (version 5 syntax, then version 3); returns the aligned file."""
-        muscle = self._paths.find_tool(self._params.get('muscle_path') or '', MUSCLE_NAMES)
+        muscle = self._paths.find_tool(self._params.get('muscle_path') or '', tuple(utils.exe_name(b) for b in MUSCLE_BASES))
         if not muscle or not os.path.isfile(muscle):
             raise _FileFailed(_t('err_muscle'))
         aligned = alignment.aligned_path(fasta)
@@ -282,6 +282,7 @@ class PipelineRunner:
                 raise _Cancelled(cancel_key)
             proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, errors='replace',
+                                    env=utils.child_env(),
                                     creationflags=_CREATION_FLAGS)
             self._proc = proc
         try:

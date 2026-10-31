@@ -1,0 +1,270 @@
+name: release
+
+# A tag vX.Y.Z[-suffix] builds both packages and creates a DRAFT release (never
+# published automatically). A manual run builds and tests everything but uploads
+# nothing to Releases: the packages stay as workflow artifacts.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: '3.13'
+
+jobs:
+  version:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag and derive the version
+        id: version
+        run: |
+          version=$(python3 packaging/release_meta.py version "$GITHUB_REF")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  tests:
+    needs: version
+    uses: ./.github/workflows/tests.yml
+
+  tools-windows:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git unzip
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
+      - name: Cache Windows programs
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: release-bin-windows-${{ hashFiles('packaging/third_party.json', 'packaging/build_raxml_windows.sh', 'packaging/patches/**') }}
+      - name: Fetch programs and build RAxML-NG
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $env:PHYMLGUI_BASH = Join-Path '${{ steps.msys2.outputs.msys2-location }}' 'usr\bin\bash.exe'
+          python scripts/fetch_third_party.py --platform windows --dest bin
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: RAxML-NG parity run (Windows build)
+        run: python packaging/raxml_parity.py run --exe bin/raxml-ng.exe --out parity-windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-windows
+          path: bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parity-windows
+          path: parity-windows
+
+  tools-linux:
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install build tools and OpenMPI
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          openmpi-bin libopenmpi-dev build-essential autoconf automake libtool pkg-config
+      - name: Cache Linux programs
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: release-bin-linux-${{ hashFiles('packaging/third_party.json', 'packaging/build_phyml_linux.sh') }}
+      - name: Fetch programs and build PhyML / PhyML-MPI
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: python scripts/fetch_third_party.py --platform linux --dest bin
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: RAxML-NG parity run (official Linux build)
+        run: python packaging/raxml_parity.py run --exe bin/raxml-ng --out parity-linux
+      # tar keeps the executable bits that upload-artifact would drop
+      - name: Pack programs
+        run: tar -czf bin-linux.tar.gz bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-linux
+          path: bin-linux.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parity-linux
+          path: parity-linux
+
+  raxml-parity:
+    needs: [tools-windows, tools-linux]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install biopython
+      - uses: actions/download-artifact@v4
+        with:
+          name: parity-windows
+          path: parity-windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: parity-linux
+          path: parity-linux
+      - name: Compare the Windows build with the official Linux build
+        run: python packaging/raxml_parity.py compare parity-windows parity-linux
+
+  package-windows:
+    needs: [version, tests, raxml-parity]
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install -r requirements.txt pyinstaller
+      - uses: actions/download-artifact@v4
+        with:
+          name: bin-windows
+          path: bin
+      - name: Install Microsoft MPI (the bundled phyml-mpi.exe needs msmpi.dll)
+        run: |
+          python scripts/fetch_third_party.py --platform windows_runtime --dest mpi
+          Start-Process mpi/msmpisetup.exe -ArgumentList '-unattend' -Wait
+      - name: Build the zip
+        run: python packaging/package.py windows --version "$env:VERSION" --bin bin --out dist
+      - name: Smoke test
+        run: python packaging/smoke_test.py --package "dist/phymlGUI-$env:VERSION-windows-x64.zip" --version "$env:VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-windows
+          path: dist/phymlGUI-*-windows-x64.zip
+
+  package-linux:
+    needs: [version, tests, raxml-parity]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install Qt runtime libraries and OpenMPI
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libxcb-cursor0
+          openmpi-bin
+      - run: pip install -r requirements.txt pyinstaller
+      - uses: actions/download-artifact@v4
+        with:
+          name: bin-linux
+      - run: tar -xzf bin-linux.tar.gz
+      - name: Fetch the pinned appimagetool and runtime
+        run: python scripts/fetch_third_party.py --platform build_tools --dest tools
+      - name: Build the AppImage
+        run: >
+          python packaging/package.py linux --version "$VERSION" --bin bin --out dist
+          --appimagetool tools/appimagetool --runtime tools/runtime-x86_64
+      - name: Smoke test (with OpenMPI)
+        run: python packaging/smoke_test.py --package "dist/phymlGUI-$VERSION-x86_64.AppImage" --version "$VERSION" --mpi
+      - name: Run in a clean ubuntu:22.04 container
+        run: |
+          mkdir check
+          cp "dist/phymlGUI-$VERSION-x86_64.AppImage" check/phymlgui.AppImage
+          python - <<'EOF'
+          import json, sys
+          sys.path.insert(0, 'tests/e2e')
+          from dataset_gen import make_dataset, write_fasta
+          names, _, unaligned = make_dataset()
+          write_fasta('check/unaligned.fasta', names, unaligned)
+          json.dump({'engine': 'phyml', 'datatype': 'nt', 'model': 'HKY85',
+                     'support_method': 'bootstrap', 'bootstrap_replicates': '4',
+                     'use_mpi': False}, open('check/config.json', 'w'))
+          EOF
+          docker run --rm -v "$PWD/check:/check" -w /check ubuntu:22.04 sh -c '
+            set -e
+            ./phymlgui.AppImage --appimage-extract-and-run --version
+            ./phymlgui.AppImage --appimage-extract-and-run --file unaligned.fasta --config config.json
+            ls *_phyml_tree.txt'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-linux
+          path: dist/phymlGUI-*-x86_64.AppImage
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [version, package-windows, package-linux]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: out
+          merge-multiple: true
+      - name: RAxML-NG sources and the Windows patch (AGPL-3.0)
+        run: |
+          url=$(python3 -c "import json; print(json.load(open('packaging/third_party.json'))['windows']['raxml']['url'])")
+          sha=$(python3 -c "import json; print(json.load(open('packaging/third_party.json'))['windows']['raxml']['sha256'])")
+          mkdir src && curl -fsSL -o src/raxml-ng_v2.0.3_source.zip "$url"
+          echo "$sha  src/raxml-ng_v2.0.3_source.zip" | sha256sum -c -
+          python3 packaging/release_meta.py raxml-source src/raxml-ng_v2.0.3_source.zip \
+            packaging/patches/raxml-ng-2.0.3-windows.patch out/raxml-ng-2.0.3-source+patch.tar.gz
+      - name: Checksums and release notes
+        run: |
+          python3 packaging/release_meta.py sha256sums out/SHA256SUMS \
+            out/phymlGUI-*-windows-x64.zip out/phymlGUI-*-x86_64.AppImage out/raxml-ng-2.0.3-source+patch.tar.gz
+          python3 packaging/release_meta.py notes "$VERSION" notes.md
+      - name: Create or update the draft release
+        run: |
+          # vX.Y.Z-suffix (rc, beta) is a pre-release
+          prerelease=()
+          case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
+          files=(out/phymlGUI-*-windows-x64.zip out/phymlGUI-*-x86_64.AppImage
+                 out/raxml-ng-2.0.3-source+patch.tar.gz out/SHA256SUMS)
+          if draft=$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null); then
+            if [ "$draft" != "true" ]; then
+              echo "::error::release $TAG is already published; not touching it"
+              exit 1
+            fi
+            gh release upload "$TAG" "${files[@]}" --clobber
+            if [ ${#prerelease[@]} -gt 0 ]; then gh release edit "$TAG" "${prerelease[@]}"; fi
+          else
+            gh release create "$TAG" --draft "${prerelease[@]}" --verify-tag --title "phymlGUI $VERSION" \
+              --notes-file notes.md "${files[@]}"
+          fi

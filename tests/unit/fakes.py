@@ -63,6 +63,13 @@ class FakeEngine(Engine):
 
 def fake_muscle(tmp_path, mode: str) -> str:
     """A muscle-<mode>.cmd in tmp_path that runs fake_tool.py in that MUSCLE mode."""
+    if os.name != 'nt':   # a POSIX shell script on Linux
+        script = os.path.join(str(tmp_path), f'muscle-{mode}')
+        with open(script, 'w', encoding='utf-8', newline='\n') as handle:
+            handle.write('#!/bin/sh\n')
+            handle.write(f'exec "{sys.executable}" "{FAKE_TOOL}" {mode} "$@"\n')
+        os.chmod(script, 0o755)
+        return script
     script = os.path.join(str(tmp_path), f'muscle-{mode}.cmd')
     with open(script, 'w', encoding='oem', newline='\r\n') as handle:
         handle.write('@echo off\n')

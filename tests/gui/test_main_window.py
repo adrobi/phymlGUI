@@ -1,4 +1,6 @@
 """GUI behaviour of PhyMLApp that needs no analysis binaries."""
+import os
+
 import pytest
 from PySide6.QtWidgets import QSizePolicy
 
@@ -394,3 +396,31 @@ def test_closing_the_window_kills_the_running_process_tree(window, qtbot, tmp_pa
     assert threading.main_thread() in callers, 'close() left the kill to a daemon thread'
     alive = [p.pid for p in procs if p.is_running()]
     assert alive == [], f'processes left after close: {alive}'
+
+
+def test_open_output_dir_uses_qdesktopservices_off_windows(window, tmp_path, monkeypatch):
+    from PySide6.QtGui import QDesktopServices
+    from phyml_core import utils
+    opened = []
+    monkeypatch.setattr(utils, 'IS_WINDOWS', False)
+    monkeypatch.setattr(QDesktopServices, 'openUrl', staticmethod(lambda url: opened.append(url) or True))
+    window._last_out_dir = str(tmp_path)
+    window._open_output_dir()
+    assert len(opened) == 1
+    assert os.path.normcase(os.path.abspath(opened[0].toLocalFile())) == os.path.normcase(str(tmp_path))
+
+
+def test_open_output_dir_starts_xdg_open_with_the_child_env(window, tmp_path, monkeypatch):
+    """xdg-open inherits the process environment: it must not see the bundle's LD_LIBRARY_PATH."""
+    from PySide6.QtGui import QDesktopServices
+    from phyml_core import utils
+    seen = []
+    monkeypatch.setattr(utils, 'IS_WINDOWS', False)
+    monkeypatch.setattr(utils, 'child_env', lambda: {'PHYMLGUI_CHILD': '1'})
+    monkeypatch.setattr(QDesktopServices, 'openUrl',
+                        staticmethod(lambda url: seen.append(dict(os.environ)) or True))
+    before = dict(os.environ)
+    window._last_out_dir = str(tmp_path)
+    window._open_output_dir()
+    assert seen == [{'PHYMLGUI_CHILD': '1'}]
+    assert dict(os.environ) == before

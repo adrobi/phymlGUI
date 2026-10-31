@@ -1,5 +1,6 @@
 """Where phymlGUI keeps its program files and its user data (no Qt, no cwd dependence)."""
 import os
+import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -82,7 +83,8 @@ class AppPaths:
 
     def find_tool(self, stored: str, names: tuple) -> str:
         """The configured tool if it exists, else the first of names in bin/, else the
-        configured path again (so the error message names what the user set)."""
+        first of names on PATH, else the configured path again (so the error message
+        names what the user set)."""
         configured = self.from_stored(stored)
         if configured and os.path.isfile(configured):
             return configured
@@ -90,24 +92,35 @@ class AppPaths:
             candidate = os.path.join(self.bin_dir, name)
             if os.path.isfile(candidate):
                 return candidate
+        for name in names:
+            found = shutil.which(name)
+            if found:
+                return found
         return configured
 
     @classmethod
     def detect(cls, env: Optional[Mapping[str, str]] = None,
                is_writable: Optional[Callable[[str], bool]] = None,
-               app_dir: Optional[str] = None) -> 'AppPaths':
+               app_dir: Optional[str] = None,
+               platform: Optional[str] = None) -> 'AppPaths':
         """Pick the data folder: $PHYMLGUI_DATA_DIR, then app_dir if writable, then
-        %APPDATA%\\phymlGUI. The chosen folder is created."""
+        %APPDATA%\\phymlGUI on Windows or $XDG_CONFIG_HOME/phymlGUI (~/.config/phymlGUI)
+        elsewhere, e.g. inside a read-only AppImage. The chosen folder is created."""
         env = os.environ if env is None else env
+        platform = os.name if platform is None else platform
         is_writable = is_writable or _dir_is_writable
         app = default_app_dir() if app_dir is None else app_dir
         override = env.get(DATA_DIR_ENV)
         if override:
             data = override
-        elif is_writable(app):
+        elif not env.get('APPIMAGE') and is_writable(app):   # an AppImage's folder is throwaway
             data = app
-        else:
+        elif platform == 'nt':
             base = env.get('APPDATA') or os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming')
+            data = os.path.join(base, APPDATA_SUBDIR)
+        else:
+            home = env.get('HOME') or os.path.expanduser('~')
+            base = env.get('XDG_CONFIG_HOME') or os.path.join(home, '.config')
             data = os.path.join(base, APPDATA_SUBDIR)
         os.makedirs(data, exist_ok=True)
         return cls(app_dir=app, data_dir=data)

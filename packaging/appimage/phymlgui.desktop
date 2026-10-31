@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=phymlGUI
+Comment=Maximum-likelihood phylogenetics with PhyML, IQ-TREE and RAxML-NG
+Exec=phymlgui
+Icon=phymlgui
+Categories=Science;Biology;
+Terminal=false

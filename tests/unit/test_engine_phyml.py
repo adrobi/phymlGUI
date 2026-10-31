@@ -3,6 +3,7 @@ import os
 import shutil
 
 import pytest
+from phyml_core.utils import default_mpirun, exe_name
 from conftest import DATA, ROOT
 
 from phyml_core import settings
@@ -30,7 +31,7 @@ def paths(tmp_path):
 @pytest.fixture
 def exe(tmp_path):
     """An existing PhyML-looking file outside bin/."""
-    path = tmp_path / 'phyml.exe'
+    path = tmp_path / exe_name('phyml')
     path.write_bytes(b'')
     return str(path)
 
@@ -232,25 +233,38 @@ def test_executable_prefers_the_configured_file(paths, exe):
 
 
 def test_executable_falls_back_to_bin(paths):
-    bin_exe = os.path.join(paths.bin_dir, 'phyml-mpi.exe')
+    bin_exe = os.path.join(paths.bin_dir, exe_name('phyml-mpi'))
     os.makedirs(paths.bin_dir)
     open(bin_exe, 'wb').close()
     assert PhyML().executable({'phyml_path': ''}, paths) == bin_exe
     assert PhyML().executable({}, paths) == bin_exe
 
 
-def test_executable_prefers_the_mpi_build_in_bin(paths):
+def test_executable_picks_the_build_matching_the_mpi_mode(paths):
     os.makedirs(paths.bin_dir)
-    for name in ('phyml.exe', 'phyml-mpi.exe'):
+    for name in (exe_name('phyml'), exe_name('phyml-mpi')):
         open(os.path.join(paths.bin_dir, name), 'wb').close()
-    assert PhyML().executable({}, paths) == os.path.join(paths.bin_dir, 'phyml-mpi.exe')
+    assert PhyML().executable({'use_mpi': True}, paths) == os.path.join(paths.bin_dir, exe_name('phyml-mpi'))
+    serial = os.path.join(paths.bin_dir, exe_name('phyml'))
+    assert PhyML().executable({'use_mpi': False}, paths) == serial
+    assert PhyML().executable({}, paths) == serial
+
+
+def test_serial_bootstrap_is_valid_when_the_serial_build_is_bundled(paths):
+    """AppImage ships phyml and phyml-mpi: defaults (bootstrap, no MPI) must use phyml."""
+    os.makedirs(paths.bin_dir)
+    for name in (exe_name('phyml'), exe_name('phyml-mpi')):
+        with open(os.path.join(paths.bin_dir, name), 'wb') as f:
+            f.write(b'MPI_Init' if name.startswith('phyml-mpi') else b'serial')
+    issues = PhyML().validate({'use_mpi': False, 'support_method': 'bootstrap'}, paths)
+    assert [i.key for i in issues] == []
 
 
 def test_executable_resolves_a_stored_relative_path(paths):
     os.makedirs(os.path.join(paths.app_dir, 'tools'))
-    target = os.path.join(paths.app_dir, 'tools', 'phyml.exe')
+    target = os.path.join(paths.app_dir, 'tools', exe_name('phyml'))
     open(target, 'wb').close()
-    assert PhyML().executable({'phyml_path': os.path.join('tools', 'phyml.exe')}, paths) == target
+    assert PhyML().executable({'phyml_path': os.path.join('tools', exe_name('phyml'))}, paths) == target
 
 
 def test_executable_returns_the_configured_path_when_nothing_exists(paths, tmp_path):
@@ -286,12 +300,12 @@ def test_validate_empty_path_without_bin_reports_the_missing_exe(paths):
 
 def test_validate_uses_the_bin_fallback(paths):
     os.makedirs(paths.bin_dir)
-    open(os.path.join(paths.bin_dir, 'phyml.exe'), 'wb').close()
+    open(os.path.join(paths.bin_dir, exe_name('phyml')), 'wb').close()
     assert PhyML().validate(dict(P, phyml_path=''), paths) == []
 
 
 def test_validate_serial_bootstrap_on_mpi_build(paths, tmp_path):
-    mpi_exe = tmp_path / 'phyml-mpi.exe'
+    mpi_exe = tmp_path / exe_name('phyml-mpi')
     mpi_exe.write_bytes(b'')
     issues = PhyML().validate(dict(P, phyml_path=str(mpi_exe), use_mpi=False), paths)
     assert issues == [Issue('error', 'mpi_boot_msg')]
@@ -299,24 +313,24 @@ def test_validate_serial_bootstrap_on_mpi_build(paths, tmp_path):
 
 def test_validate_mpi_build_is_fine_with_mpi_alrt_or_a_serial_build(paths, tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, 'which', lambda *a, **k: 'C:/MS/mpiexec.exe')
-    mpi_exe = tmp_path / 'phyml-mpi.exe'
+    mpi_exe = tmp_path / exe_name('phyml-mpi')
     mpi_exe.write_bytes(b'')
     base = dict(P, phyml_path=str(mpi_exe), mpirun_path='mpiexec', mpi_np='2')
     assert PhyML().validate(dict(base, use_mpi=True), paths) == []
     assert PhyML().validate(dict(base, use_mpi=False, support_method='-4'), paths) == []
-    serial = tmp_path / 'phyml.exe'
+    serial = tmp_path / exe_name('phyml')
     serial.write_bytes(b'')
     assert PhyML().validate(dict(base, phyml_path=str(serial), use_mpi=False), paths) == []
 
 
 def test_validate_serial_bootstrap_check_sees_the_bin_fallback(paths):
     os.makedirs(paths.bin_dir)
-    open(os.path.join(paths.bin_dir, 'phyml-mpi.exe'), 'wb').close()
+    open(os.path.join(paths.bin_dir, exe_name('phyml-mpi')), 'wb').close()
     assert keys(PhyML().validate(dict(P, phyml_path='', use_mpi=False), paths)) == ['mpi_boot_msg']
 
 
 def test_validate_reports_only_the_missing_exe_not_a_guess_about_its_build(paths, tmp_path):
-    missing = str(tmp_path / 'phyml-mpi.exe')
+    missing = str(tmp_path / exe_name('phyml-mpi'))
     assert keys(PhyML().validate(dict(P, phyml_path=missing, use_mpi=False), paths)) == ['val_no_exe']
 
 
@@ -403,12 +417,13 @@ def test_validate_mpiexec_present_as_a_file_or_a_command_name(paths, exe, tmp_pa
 
 @pytest.mark.parametrize('blank', ['', '   '])
 def test_blank_mpirun_path_falls_back_to_mpiexec(paths, exe, monkeypatch, blank):
-    monkeypatch.setattr(shutil, 'which', lambda name, *a, **k: 'C:/MS/mpiexec.exe' if name == 'mpiexec' else None)
+    launcher_name = default_mpirun()   # mpiexec on Windows, mpirun elsewhere
+    monkeypatch.setattr(shutil, 'which', lambda name, *a, **k: '/x/' + name if name == launcher_name else None)
     params = dict(P, phyml_path=exe, use_mpi=True, mpirun_path=blank, mpi_np='3')
     assert PhyML().validate(params, paths) == []
-    assert PhyML().launcher(params) == Mpi('C:/MS/mpiexec.exe', 3)
+    assert PhyML().launcher(params) == Mpi('/x/' + launcher_name, 3)
     monkeypatch.setattr(shutil, 'which', lambda *a, **k: None)
-    assert PhyML().validate(params, paths) == [Issue('error', 'val_no_mpiexec', ('mpiexec',))]
+    assert PhyML().validate(params, paths) == [Issue('error', 'val_no_mpiexec', (launcher_name,))]
 
 
 def test_validate_mpiexec_is_not_checked_when_mpi_is_off(paths, exe, monkeypatch):

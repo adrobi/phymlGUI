@@ -1,0 +1,4 @@
+#!/bin/sh
+# AppImage entry point: run the bundled phymlGUI (GUI without arguments, CLI with them)
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/bin/phymlgui" "$@"

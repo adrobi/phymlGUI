@@ -2,6 +2,7 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import hashlib
+import shutil
 import sys
 from pathlib import Path
 
@@ -12,16 +13,17 @@ DATA = ROOT / 'tests' / 'data'
 sys.path.insert(0, str(ROOT))
 
 _BINARIES = {
-    # kind: (env var, bin/ file name, extra local locations)
-    'phyml': ('PHYMLGUI_PHYML', 'phyml-mpi.exe',
+    # kind: (env var, tool base name, extra local locations); the base name gets
+    # '.exe' on Windows (utils.exe_name) and is also looked up on PATH
+    'phyml': ('PHYMLGUI_PHYML', 'phyml-mpi',
               [ROOT / 'phymlgui v1.1' / 'phyml-mpi.exe']),
-    'mpiexec': ('PHYMLGUI_MPIEXEC', 'mpiexec.exe',
+    'mpiexec': ('PHYMLGUI_MPIEXEC', 'mpiexec' if os.name == 'nt' else 'mpirun',
                 [Path(r'C:\Program Files\Microsoft MPI\Bin\mpiexec.exe')]),
-    'iqtree': ('PHYMLGUI_IQTREE', 'iqtree2.exe',
+    'iqtree': ('PHYMLGUI_IQTREE', 'iqtree2',
                [ROOT / 'tools' / 'iqtree2' / 'iqtree2.exe']),
-    'muscle': ('PHYMLGUI_MUSCLE', 'muscle.exe',
+    'muscle': ('PHYMLGUI_MUSCLE', 'muscle',
                [ROOT / 'tools' / 'muscle.exe']),
-    'raxml': ('PHYMLGUI_RAXML', 'raxml-ng.exe', []),
+    'raxml': ('PHYMLGUI_RAXML', 'raxml-ng', []),
 }
 
 # marker name -> binary kind (needs_mpi is satisfied by mpiexec)
@@ -34,17 +36,20 @@ _MARKER_KINDS = {
 
 
 def find_binary(kind):
-    """Path to an analysis binary or None: env var, then ROOT/bin, then local installs."""
-    env_var, bin_name, local = _BINARIES[kind]
+    """Path to an analysis binary or None: env var, then ROOT/bin, then local installs,
+    then PATH."""
+    from phyml_core.utils import exe_name
+    env_var, base, local = _BINARIES[kind]
     candidates = []
     if os.environ.get(env_var):
         candidates.append(Path(os.environ[env_var]))
-    candidates.append(ROOT / 'bin' / bin_name)
-    candidates.extend(local)
+    candidates.append(ROOT / 'bin' / exe_name(base))
+    if os.name == 'nt':   # the extra local locations are Windows installs
+        candidates.extend(local)
     for path in candidates:
         if path.is_file():
             return str(path)
-    return None
+    return shutil.which(exe_name(base))
 
 
 def pytest_runtest_setup(item):

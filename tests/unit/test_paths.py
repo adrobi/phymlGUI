@@ -35,7 +35,7 @@ def test_detect_prefers_writable_app_dir(tmp_path):
 
 def test_detect_falls_back_to_appdata(tmp_path):
     p = AppPaths.detect(env={'APPDATA': str(tmp_path / 'ad')}, is_writable=lambda d: False,
-                        app_dir=str(tmp_path / 'app'))
+                        app_dir=str(tmp_path / 'app'), platform='nt')
     assert p.data_dir == str(tmp_path / 'ad' / 'phymlGUI') and os.path.isdir(p.data_dir)
 
 
@@ -48,7 +48,7 @@ def test_detect_default_probe_creates_and_removes_temp_file(tmp_path):
 
 def test_detect_default_probe_rejects_missing_dir(tmp_path):
     missing = tmp_path / 'no-such-app'
-    p = AppPaths.detect(env={'APPDATA': str(tmp_path / 'ad')}, app_dir=str(missing))
+    p = AppPaths.detect(env={'APPDATA': str(tmp_path / 'ad')}, app_dir=str(missing), platform='nt')
     assert p.data_dir == str(tmp_path / 'ad' / 'phymlGUI')
     assert not missing.exists()
 
