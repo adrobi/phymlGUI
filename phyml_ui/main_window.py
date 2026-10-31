@@ -6,10 +6,10 @@ from datetime import datetime
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
                              QPushButton, QMessageBox, QCheckBox, QSplitter, QScrollArea,
                              QInputDialog, QApplication)
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QIcon
 
-from phyml_core import __version__, presets, report, settings
+from phyml_core import __version__, presets, report, settings, utils
 from phyml_core.engines import ENGINES
 from phyml_core.engines.base import format_issue
 from phyml_core.history import HistoryStore, best_tree, new_record
@@ -391,7 +391,10 @@ class PhyMLApp(QWidget):
 
     def _open_output_dir(self):
         if self._last_out_dir and os.path.isdir(self._last_out_dir):
-            os.startfile(self._last_out_dir)
+            if utils.IS_WINDOWS:
+                os.startfile(self._last_out_dir)
+            else:   # xdg-open, also from inside an AppImage
+                QDesktopServices.openUrl(QUrl.fromLocalFile(self._last_out_dir))
 
     # ---------- history ----------
 

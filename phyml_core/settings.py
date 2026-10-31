@@ -8,6 +8,7 @@ from typing import Callable, List, Optional
 
 from .i18n import _t
 from .paths import CONFIG_NAME, HISTORY_NAME, AppPaths
+from . import utils
 from .utils import detect_cores
 
 SCHEMA_VERSION = 2
@@ -153,6 +154,10 @@ def from_disk(cfg: dict, paths: AppPaths) -> dict:
         out[key] = paths.from_stored(value)
     if isinstance(out.get('recent'), list):
         out['recent'] = [paths.from_stored(p) if isinstance(p, str) else p for p in out['recent']]
+    # a config carried over from Windows names MS-MPI's mpiexec; OpenMPI ships mpirun
+    if (not utils.IS_WINDOWS and out.get('mpirun_path') == 'mpiexec'
+            and shutil.which('mpiexec') is None):
+        out['mpirun_path'] = utils.default_mpirun()
     return out
 
 

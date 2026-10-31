@@ -9,6 +9,19 @@ except ImportError:
     psutil = None
 
 
+IS_WINDOWS = os.name == 'nt'
+
+
+def exe_name(base):
+    """Platform file name of a tool: 'muscle' -> 'muscle.exe' on Windows."""
+    return base + '.exe' if IS_WINDOWS else base
+
+
+def default_mpirun():
+    """The MPI launcher looked up through PATH: MS-MPI's mpiexec or OpenMPI's mpirun."""
+    return 'mpiexec' if IS_WINDOWS else 'mpirun'
+
+
 def resource_path(relative_path):
     """Absolute path to a bundled resource: inside the PyInstaller bundle when frozen,
     otherwise next to the program (never relative to the current working folder)."""

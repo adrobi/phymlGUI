@@ -5,12 +5,13 @@ from typing import Dict, List, Tuple, Union
 
 from ..launchers import Mpi, Native
 from ..paths import AppPaths
+from ..utils import exe_name
 from .base import Engine, EngineOutputs, Issue, param_text, positive_int
 
 NT_MODELS = ("MFP", "GTR+F+G4", "HKY+F+G4", "TIM2+F+G4", "TVM+F+G4")
 AA_MODELS = ("MFP", "LG+G4", "WAG+G4", "JTT+G4", "mtREV+G4")
 
-EXECUTABLE_NAMES = ('iqtree2.exe',)
+EXECUTABLE_BASES = ('iqtree2',)
 
 UFBOOT_MIN_REPLICATES = 1000
 
@@ -87,7 +88,7 @@ class IqTree(Engine):
         return normalized, notes
 
     def executable(self, params: dict, paths: AppPaths) -> str:
-        return paths.find_tool(params.get('iqtree_path', ''), EXECUTABLE_NAMES)
+        return paths.find_tool(params.get('iqtree_path', ''), tuple(exe_name(b) for b in EXECUTABLE_BASES))
 
     def command(self, exe: str, phylip: str, params: dict) -> List[str]:
         argv = [exe, '-s', phylip, '--prefix', _prefix(phylip), '-redo',
