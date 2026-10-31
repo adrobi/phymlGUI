@@ -48,12 +48,32 @@ jobs:
         run: |
           set +e
           try() { echo "--- $1"; sh -c "$2" > /tmp/out.txt 2>&1; echo "exit=$?"; grep -a -E "Fatal|passed|failed|rror" /tmp/out.txt | head -3; }
-          for f in $(find tests -name 'test_*.py' | sort); do
-            try "$f" "python -m pytest -q -p no:cacheprovider $f"
-          done
-          for t in $(python -m pytest -q --co tests/e2e/test_batch.py 2>/dev/null | grep '::'); do
-            try "$t" "python -m pytest -q -p no:cacheprovider '$t'"
-          done
+          cat > /tmp/refs.py <<'EOF'
+          import os, subprocess, sys, time
+          import psutil
+          child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+          me = psutil.Process(os.getpid())
+          calls = {
+              'cpu_percent()': lambda: psutil.cpu_percent(interval=None),
+              'cpu_count(logical=False)': lambda: psutil.cpu_count(logical=False),
+              'cpu_count(logical=True)': lambda: psutil.cpu_count(logical=True),
+              'Process(pid)': lambda: psutil.Process(child.pid),
+              'children(recursive)': lambda: me.children(recursive=True),
+              'proc.cpu_percent': lambda: psutil.Process(child.pid).cpu_percent(interval=None),
+              'is_running': lambda: psutil.Process(child.pid).is_running(),
+              'status': lambda: psutil.Process(child.pid).status(),
+              'pid_exists': lambda: psutil.pid_exists(child.pid),
+              'wait_procs(0)': lambda: psutil.wait_procs([psutil.Process(child.pid)], timeout=0),
+          }
+          for name, call in calls.items():
+              t0, f0 = sys.getrefcount(True), sys.getrefcount(False)
+              for _ in range(200):
+                  call()
+              print(f'{name:28} dTrue={sys.getrefcount(True) - t0:+5} dFalse={sys.getrefcount(False) - f0:+5}')
+          child.kill()
+          EOF
+          sed -i 's/^          //' /tmp/refs.py
+          python /tmp/refs.py
           true
       - name: Tests
         run: python -m pytest -q -rs
