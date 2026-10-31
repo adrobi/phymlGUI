@@ -46,12 +46,18 @@ jobs:
         if: runner.os == 'Linux' && matrix.python-version == '3.11'
         continue-on-error: true
         run: |
-          for f in $(find tests -name 'test_*.py' | sort); do
-            python -m pytest -q -p no:cacheprovider "$f" > /tmp/out.txt 2>&1
-            code=$?
-            echo "exit=$code $f"
-            [ "$code" -gt 1 ] && grep -a -E "Fatal|passed|failed" /tmp/out.txt
-          done
+          set +e
+          try() { echo "--- $1"; sh -c "$2" > /tmp/out.txt 2>&1; echo "exit=$?"; grep -a -E "Fatal|passed|failed|rror" /tmp/out.txt | head -3; }
+          try core 'python -c "import PySide6.QtCore"'
+          try widgets 'python -c "from PySide6.QtWidgets import QApplication; app = QApplication([])"'
+          try mpl 'python -c "import matplotlib; matplotlib.use(\"QtAgg\"); import matplotlib.pyplot"'
+          try pytest-empty 'python -m pytest -q -p no:cacheprovider tests/unit/test_release_meta.py'
+          try pytest-noqt 'python -m pytest -q -p no:cacheprovider -p no:pytest-qt tests/unit/test_release_meta.py'
+          try pytest-noqt-noconftest 'python -m pytest -q -p no:cacheprovider -p no:pytest-qt --noconftest tests/unit/test_release_meta.py'
+          try import-core 'python -c "import phyml_core.runner, phyml_core.engines.phyml"'
+          try import-ui 'python -c "import phyml_ui.main_window"'
+          try psutil 'python -c "import psutil; psutil.cpu_count(logical=False)"'
+          try bio 'python -c "from Bio import Phylo, SeqIO"'
           true
       - name: Tests
         run: python -m pytest -q -rs
