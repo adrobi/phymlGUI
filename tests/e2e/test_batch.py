@@ -30,10 +30,10 @@ def gui_batch(window, warned, qtbot, binaries, batch_dir, synthetic):
     window.phyml_path_input.setText(binaries['phyml'])
     window.mpirun_path_input.setText(binaries['mpiexec'])
     window.muscle_path_input.setText(binaries['muscle'])
-    window.chk_use_mpi.setChecked(True)
-    window.set_combo_by_data(window.cb_support_method, 'bootstrap')
-    window.le_bootstrap_replicates.setText('20')
-    window.le_mpi_np.setText('2')
+    window.params.chk_use_mpi.setChecked(True)
+    window.set_combo_by_data(window.params.cb_support_method, 'bootstrap')
+    window.params.le_bootstrap_replicates.setText('20')
+    window.params.le_mpi_np.setText('2')
     window.fasta_path_input.setText(str(batch_dir))
     window.btn_run.click()  # real signal path: clicked(bool) must not break start_pipeline
     assert not warned, f'run was blocked by a warning: {warned}'
@@ -77,11 +77,11 @@ def test_gui_batch_writes_summary_csv(gui_batch):
 def test_queue_history_open_folder(gui_batch):
     """Queue statuses, history record and the open-folder button after a batch."""
     window, _ = gui_batch
-    assert window.queue_list.count() == 2
-    statuses = [window.queue_list.item(i).text().split('  ')[-1] for i in range(2)]
+    assert window.result_tabs.queue_list.count() == 2
+    statuses = [window.result_tabs.queue_list.item(i).text().split('  ')[-1] for i in range(2)]
     assert statuses == ['✓', '✓'], statuses
     records = HistoryStore(window.paths.history_file).load()
     assert records and records[0]['n'] == 2 and records[0]['ok'] == 2
-    assert window.history_list.count() >= 1
+    assert window.nav.history_list.count() >= 1
     assert window.status.open_dir_btn.isEnabled()
-    assert not window.retry_btn.isVisible() or not window._failed_files
+    assert not window.result_tabs.retry_btn.isVisible() or not window._failed_files

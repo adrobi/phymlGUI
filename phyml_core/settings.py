@@ -177,3 +177,66 @@ def migrate_legacy(paths: AppPaths, cwd: str) -> List[str]:
     for name in pending:
         shutil.copy2(os.path.join(cwd, name), os.path.join(paths.data_dir, name))
     return pending
+
+
+class SettingsStore:
+    """The settings file as an application keeps it: one legacy migration, a load that
+    survives a damaged file, saves that keep the keys this version does not know.
+
+    A file that exists but cannot be read (or a failed migration with no config yet)
+    blocks saving for the session, so defaults never replace the user's real settings
+    and the migration gate stays open. Messages go to log(level, text).
+    """
+
+    def __init__(self, paths: AppPaths, log: Callable[[str, str], None]):
+        self.paths = paths
+        self._log = log
+        self.blocked = False      # never save: the file could not be read
+        self._save_failed = False  # the last save failed (the error is logged once)
+        self._extra = {}          # keys of the file this version does not know
+
+    def load(self, cwd: Optional[str] = None) -> tuple:
+        """Migrate from cwd (default: the working folder) once, then read the file.
+        Returns (settings as on disk, filled with defaults; whether they read cleanly)."""
+        self._migrate(cwd)
+        problems = []
+        try:
+            raw = load(self.paths.config_file, on_error=problems.append)
+        except OSError as e:
+            self.blocked = True
+            problems.append(_t('err_load').format(e))
+            raw = copy.deepcopy(DEFAULTS)
+        for message in problems:
+            self._log('error', message)
+        self._extra = {k: v for k, v in raw.items() if k not in DEFAULTS}
+        return raw, not problems
+
+    def _migrate(self, cwd: Optional[str]) -> None:
+        try:
+            cwd = os.getcwd() if cwd is None else cwd   # getcwd fails for a deleted folder
+            copied = migrate_legacy(self.paths, cwd)
+        except OSError as e:
+            self._log('error', _t('err_load').format(e))
+            if not os.path.exists(self.paths.config_file):
+                # Saving the defaults now would create the config that closes the migration
+                # gate, and the legacy settings would never be copied.
+                self.blocked = True
+            return
+        for name in copied:
+            self._log('system', _t('settings_migrated').format(
+                os.path.join(cwd, name), os.path.join(self.paths.data_dir, name)))
+
+    def save(self, cfg: dict) -> None:
+        """Save cfg (the form of from_disk) with the unknown keys; failures are logged once."""
+        if self.blocked:
+            return
+        data = dict(self._extra)
+        data.update(to_disk(cfg, self.paths))
+        data['schema_version'] = SCHEMA_VERSION
+        try:
+            save(self.paths.config_file, data)
+            self._save_failed = False
+        except OSError as e:
+            if not self._save_failed:   # every field change saves: report a failure once
+                self._log('error', _t('err_settings_save').format(e))
+            self._save_failed = True

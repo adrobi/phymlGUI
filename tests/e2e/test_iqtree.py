@@ -78,15 +78,15 @@ def test_gui_validation_and_run_with_xlsx(window, warned, qtbot, binaries, run_d
     """GUI: engine validation, model list, full run + xlsx summary."""
     window.engine_setting = 'iqtree'
     window.update_models()
-    assert window.cb_model.currentData() == 'MFP'
+    assert window.params.cb_model.currentData() == 'MFP'
     window.iqtree_path_input.setText('')  # no binary -> blocked with warning
     window.fasta_path_input.setText(str(run_dir / 'test_prealigned.fasta'))
     window.start_pipeline()
     assert warned and (window.worker is None or not window.worker.isRunning())
 
     window.iqtree_path_input.setText(binaries['iqtree'])
-    window.set_combo_by_data(window.cb_support_method, 'bootstrap')
-    window.le_bootstrap_replicates.setText('100')
+    window.set_combo_by_data(window.params.cb_support_method, 'bootstrap')
+    window.params.le_bootstrap_replicates.setText('100')
     window.start_pipeline()
     qtbot.waitUntil(lambda: window.btn_run.isEnabled(), timeout=180_000)
     window.worker.wait()

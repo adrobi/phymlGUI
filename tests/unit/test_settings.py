@@ -322,3 +322,77 @@ def test_migrate_legacy_noop_when_data_dir_has_config(tmp_path):
     p = AppPaths(app_dir=str(tmp_path), data_dir=str(data))
     assert settings.migrate_legacy(p, str(cwd)) == []
     assert (data / CONFIG_NAME).read_text('utf-8') == '{"model": "JC69"}'  # never overwritten
+
+
+# ---------- SettingsStore ----------
+
+def make_store(tmp_path):
+    data = tmp_path / 'data'
+    lines = []
+    store = settings.SettingsStore(AppPaths(app_dir=str(tmp_path), data_dir=str(data)),
+                                   lambda level, text: lines.append((level, text)))
+    return store, data, lines
+
+
+def test_store_save_keeps_unknown_keys_and_writes_the_schema(tmp_path):
+    store, data, lines = make_store(tmp_path)
+    data.mkdir()
+    (data / CONFIG_NAME).write_text(json.dumps({'future': [1], 'model': 'GTR'}), encoding='utf-8')
+    raw, clean = store.load(cwd=str(tmp_path / 'elsewhere'))
+    assert clean and raw['model'] == 'GTR' and lines == []
+    store.save(dict(settings.DEFAULTS, model='JC69'))
+    saved = json.loads((data / CONFIG_NAME).read_text(encoding='utf-8'))
+    assert saved['future'] == [1] and saved['model'] == 'JC69'
+    assert saved['schema_version'] == settings.SCHEMA_VERSION
+
+
+def test_store_reports_a_failed_save_once_until_one_succeeds(tmp_path, monkeypatch):
+    store, data, lines = make_store(tmp_path)
+    data.mkdir()
+    store.load(cwd=str(tmp_path))
+    real_save = settings.save
+    monkeypatch.setattr(settings, 'save', lambda *a: (_ for _ in ()).throw(OSError('disk full')))
+    store.save(dict(settings.DEFAULTS))
+    store.save(dict(settings.DEFAULTS))
+    assert [level for level, _ in lines] == ['error']
+    monkeypatch.setattr(settings, 'save', real_save)
+    store.save(dict(settings.DEFAULTS))
+    monkeypatch.setattr(settings, 'save', lambda *a: (_ for _ in ()).throw(OSError('disk full')))
+    store.save(dict(settings.DEFAULTS))
+    assert [level for level, _ in lines] == ['error', 'error']
+
+
+def test_store_unreadable_file_blocks_saving(tmp_path, monkeypatch):
+    store, data, lines = make_store(tmp_path)
+    data.mkdir()
+    (data / CONFIG_NAME).write_text('{"model": "GTR"}', encoding='utf-8')
+    monkeypatch.setattr(settings, 'load', lambda *a, **k: (_ for _ in ()).throw(PermissionError(13, 'locked')))
+    raw, clean = store.load(cwd=str(tmp_path))
+    assert not clean and store.blocked and raw == settings.DEFAULTS
+    assert 'locked' in lines[0][1] and lines[0][0] == 'error'
+    store.save(dict(settings.DEFAULTS, model='JC69'))
+    assert json.loads((data / CONFIG_NAME).read_text(encoding='utf-8')) == {'model': 'GTR'}
+
+
+@pytest.mark.parametrize('config_exists', [False, True])
+def test_store_failed_migration_blocks_saving_only_without_a_config(tmp_path, monkeypatch, config_exists):
+    store, data, lines = make_store(tmp_path)
+    if config_exists:
+        data.mkdir()
+        (data / CONFIG_NAME).write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(settings, 'migrate_legacy',
+                        lambda *a: (_ for _ in ()).throw(PermissionError(13, 'copy denied')))
+    store.load(cwd=str(tmp_path))
+    assert 'copy denied' in lines[0][1]
+    assert store.blocked is not config_exists
+
+
+def test_store_logs_each_migrated_file(tmp_path):
+    store, data, lines = make_store(tmp_path)
+    legacy = tmp_path / 'old'
+    legacy.mkdir()
+    (legacy / CONFIG_NAME).write_text('{"model": "GTR"}', encoding='utf-8')
+    raw, clean = store.load(cwd=str(legacy))
+    assert raw['model'] == 'GTR' and clean
+    assert lines == [('system', _t('settings_migrated').format(
+        str(legacy / CONFIG_NAME), str(data / CONFIG_NAME)))]

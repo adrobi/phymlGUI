@@ -26,17 +26,17 @@ def restore_stylesheet(qapp):
 def test_defaults_match_detected_cores(window):
     """np defaults to the physical core count; the status bar shows the core info."""
     phys, logi = detect_cores()
-    assert window.le_mpi_np.text() == str(window.phys_cores), window.le_mpi_np.text()
+    assert window.params.le_mpi_np.text() == str(window.phys_cores), window.params.le_mpi_np.text()
     assert (window.phys_cores, window.logi_cores) == (phys, logi)
     assert str(phys) in window.status.cores_label.text() and str(logi) in window.status.cores_label.text()
 
 
 def test_mpi_binary_autodetect(window, tmp_path):
-    window.chk_use_mpi.setChecked(False)
+    window.params.chk_use_mpi.setChecked(False)
     window.phyml_path_input.setText(str(tmp_path / 'phyml.exe'))
-    assert not window.chk_use_mpi.isChecked(), 'plain phyml.exe must not enable MPI'
+    assert not window.params.chk_use_mpi.isChecked(), 'plain phyml.exe must not enable MPI'
     window.phyml_path_input.setText(str(tmp_path / 'phyml-mpi.exe'))
-    assert window.chk_use_mpi.isChecked(), 'phyml-mpi.exe must auto-enable MPI'
+    assert window.params.chk_use_mpi.isChecked(), 'phyml-mpi.exe must auto-enable MPI'
     log_text = window.log_console.toPlainText()
     assert 'MPI' in log_text, 'detection message missing from log'
 
@@ -47,8 +47,8 @@ def test_serial_bootstrap_on_mpi_build_blocked(window, warned, tmp_path):
     exe = tmp_path / 'phyml-mpi.exe'
     exe.write_bytes(b'')
     window.phyml_path_input.setText(str(exe))
-    window.chk_use_mpi.setChecked(False)  # after the path: the path edit auto-enables MPI
-    window.set_combo_by_data(window.cb_support_method, 'bootstrap')
+    window.params.chk_use_mpi.setChecked(False)  # after the path: the path edit auto-enables MPI
+    window.set_combo_by_data(window.params.cb_support_method, 'bootstrap')
     fasta = tmp_path / 'test_unaligned.fasta'
     fasta.write_text('>a\nACGT\n>b\nACGA\n')
     window.fasta_file = str(fasta)
@@ -73,16 +73,16 @@ def test_theme_tabs_presets_log_filter_recent(window, qapp, tmp_path, restore_st
     assert window.result_tabs.count() == 4, 'expected 4 result tabs (log/stats/summary/queue)'
 
     # presets: built-ins listed, apply changes support method, user preset saves
-    assert window.presets_list.count() >= 3
-    texts = [window.presets_list.item(i).text() for i in range(window.presets_list.count())]
+    assert window.nav.presets_list.count() >= 3
+    texts = [window.nav.presets_list.item(i).text() for i in range(window.nav.presets_list.count())]
     screen_row = next(i for i, t in enumerate(texts)
                       if 'скрининг' in t.lower() or 'screening' in t.lower())
-    window._preset_activated(window.presets_list.item(screen_row))
-    assert window.cb_support_method.currentData() == '-4', 'screening preset must select aLRT'
+    window.nav.presets_list.itemDoubleClicked.emit(window.nav.presets_list.item(screen_row))
+    assert window.params.cb_support_method.currentData() == '-4', 'screening preset must select aLRT'
     window._user_presets['my-test'] = {k: window.get_current_config()[k] for k in ('model',)}
     window._refresh_presets()
-    assert any(window.presets_list.item(i).text() == 'my-test'
-               for i in range(window.presets_list.count()))
+    assert any(window.nav.presets_list.item(i).text() == 'my-test'
+               for i in range(window.nav.presets_list.count()))
 
     # tree viewer zoom / pan mode buttons
     window.tree_view.btn_zoom.click()
@@ -100,7 +100,7 @@ def test_theme_tabs_presets_log_filter_recent(window, qapp, tmp_path, restore_st
     d.edits[0].setText(mpi_path)
     d.accept()
     assert window.phyml_path_input.text() == mpi_path
-    assert window.chk_use_mpi.isChecked(), 'settings edit must re-trigger MPI autodetect'
+    assert window.params.chk_use_mpi.isChecked(), 'settings edit must re-trigger MPI autodetect'
 
     # structured log: filter by role
     window.log_console.filter_box.setCurrentIndex(0)
@@ -119,7 +119,7 @@ def test_theme_tabs_presets_log_filter_recent(window, qapp, tmp_path, restore_st
     window._remember_recent('X:/a.fasta')
     window._remember_recent('X:/b.fasta')
     window._remember_recent('X:/a.fasta')
-    assert window.recent_list.count() == 2 and window._recent[0] == 'X:/a.fasta'
+    assert window.nav.recent_list.count() == 2 and window._recent[0] == 'X:/a.fasta'
 
 
 def test_cpu_bar_expands(window):
@@ -143,35 +143,35 @@ def test_model_combo_lists_the_models_of_the_engine(window, engine, datatype):
     """The model list comes from the engine registry (data and text both)."""
     from phyml_core.engines import ENGINES
     window.engine_setting = engine
-    window.set_combo_by_data(window.cb_datatype, datatype)
+    window.set_combo_by_data(window.params.cb_datatype, datatype)
     window.update_models()
-    shown = [(window.cb_model.itemText(i), window.cb_model.itemData(i)) for i in range(window.cb_model.count())]
+    shown = [(window.params.cb_model.itemText(i), window.params.cb_model.itemData(i)) for i in range(window.params.cb_model.count())]
     expected = ENGINES[engine].models(datatype)
     assert shown == [(m, m) for m in expected]
-    assert window.cb_model.currentData() == expected[0]
+    assert window.params.cb_model.currentData() == expected[0]
 
 
 def test_unknown_engine_in_the_settings_shows_the_phyml_models(window):
     from phyml_core.engines import ENGINES
     window.engine_setting = 'no-such-engine'
     window.update_models()
-    assert [window.cb_model.itemData(i) for i in range(window.cb_model.count())] == ENGINES['phyml'].models('nt')
+    assert [window.params.cb_model.itemData(i) for i in range(window.params.cb_model.count())] == ENGINES['phyml'].models('nt')
 
 
 def test_fasta_info_label_summarizes_the_alignment(window, tmp_path):
     fasta = tmp_path / 'выравнивание 1.fasta'
     fasta.write_text('>A\nACGT--\n>B\nAC\n>C\nACGTA\n', encoding='utf-8')
     window.fasta_path_input.setText(str(fasta))
-    assert window.fasta_info_label.text() == _t('fasta_info').format(3, 2, 6, 15.4)
+    assert window.fasta.info_label.text() == _t('fasta_info').format(3, 2, 6, 15.4)
 
 
 def test_fasta_info_label_is_blank_for_an_empty_file_and_counts_a_folder(window, tmp_path):
     empty = tmp_path / 'empty.fasta'
     empty.write_text('')
     window.fasta_path_input.setText(str(empty))
-    assert window.fasta_info_label.text() == ' '
+    assert window.fasta.info_label.text() == ' '
     window.fasta_path_input.setText(str(tmp_path))
-    assert window.fasta_info_label.text() == _t('fasta_info').format(1, '—', '—', '—')
+    assert window.fasta.info_label.text() == _t('fasta_info').format(1, '—', '—', '—')
 
 
 # ---------- runs through PipelineRunner (FakeEngine, no binaries) ----------
@@ -199,8 +199,8 @@ def run_to_end(window, qtbot, files=None):
 
 
 def queue_markers(window):
-    return [window.queue_list.item(i).text().split('  ')[-1]
-            for i in range(window.queue_list.count())]
+    return [window.result_tabs.queue_list.item(i).text().split('  ')[-1]
+            for i in range(window.result_tabs.queue_list.count())]
 
 
 def test_window_recovers_after_engine_exception(window, qtbot, data_dir, tmp_path,
@@ -215,7 +215,7 @@ def test_window_recovers_after_engine_exception(window, qtbot, data_dir, tmp_pat
     assert any(level == 'error' and 'boom' in text for level, text in window.log_console._entries)
     assert queue_markers(window) == [FAIL_MARK]
     assert window._failed_files == [fasta]
-    assert not window.retry_btn.isHidden()
+    assert not window.result_tabs.retry_btn.isHidden()
     rec = HistoryStore(window.paths.history_file).load()[0]
     assert (rec['ok'], rec['n']) == (0, 1)
     assert rec['files'][0]['status'] == 'fail' and 'boom' in rec['files'][0]['error']
@@ -233,15 +233,15 @@ def test_successful_run_fills_results_history_and_tree(window, qtbot, tmp_path, 
     assert result.success, window.log_console.toPlainText()
     tree = result.files[0].tree
     assert loaded == [tree]
-    assert window.stats_file_label.text().endswith('a.fasta')
-    assert window.stats_table.item(0, 1).text() == 'FAKE'
-    assert window.summary_table.rowCount() == 1
-    assert window.summary_table.item(0, 0).text() == 'a.fasta'
-    assert window.summary_table.item(0, 1).text() == 'OK'
+    assert window.result_tabs.stats_file_label.text().endswith('a.fasta')
+    assert window.result_tabs.stats_table.item(0, 1).text() == 'FAKE'
+    assert window.result_tabs.summary_table.rowCount() == 1
+    assert window.result_tabs.summary_table.item(0, 0).text() == 'a.fasta'
+    assert window.result_tabs.summary_table.item(0, 1).text() == 'OK'
     csv_path = tmp_path / 'in' / CSV_NAME
     assert csv_path.is_file()
     assert _t('summary_saved').format(str(csv_path)) in window.log_console.toPlainText()
-    assert window.retry_btn.isHidden() and window._failed_files == []
+    assert window.result_tabs.retry_btn.isHidden() and window._failed_files == []
     assert window.status.open_dir_btn.isEnabled()
     rec = HistoryStore(window.paths.history_file).load()[0]
     assert rec['engine'] == 'fake' and rec['inputs'] == [fasta]
@@ -274,11 +274,11 @@ def test_batch_with_a_failure_offers_retry_of_the_failed_file(window, qtbot, tmp
     assert [f.file for f in window.last_result.files] == [bad, good]
     assert queue_markers(window) == [FAIL_MARK, OK_MARK]
     assert window._failed_files == [bad]
-    assert not window.retry_btn.isHidden()
+    assert not window.result_tabs.retry_btn.isHidden()
     assert loaded == [], 'a batch with a failure shows no tree'
     rec = HistoryStore(window.paths.history_file).load()[0]
     assert rec['inputs'] == [str(folder)] and (rec['ok'], rec['n']) == (1, 2)
-    assert window.summary_table.rowCount() == 2
+    assert window.result_tabs.summary_table.rowCount() == 2
 
     window._retry_failed()
     qtbot.waitUntil(lambda: window.btn_run.isEnabled(), timeout=15000)
@@ -297,7 +297,7 @@ def test_cancel_from_the_window_marks_the_file_cancelled(window, qtbot, tmp_path
     window.worker.wait()
     assert window.last_result.cancelled
     assert window.last_result.files[0].status == 'cancelled'
-    assert window._failed_files == [] and window.retry_btn.isHidden()
+    assert window._failed_files == [] and window.result_tabs.retry_btn.isHidden()
     assert _t('sys_interrupt').strip() in window.log_console.toPlainText()
 
 
@@ -318,8 +318,8 @@ def test_prerun_validation_lists_all_errors(window, data_dir, tmp_path, warned):
     window.engine_setting = 'phyml'
     window.update_models()
     window.fasta_path_input.setText(write_fasta(tmp_path / 'a.fasta'))
-    window.le_tstv.setText('abc')
-    window.le_classes.setText('x')
+    window.params.le_tstv.setText('abc')
+    window.params.le_classes.setText('x')
     window.start_pipeline()
     assert len(warned) == 1
     _, title, text = warned[0][:3]
@@ -358,10 +358,10 @@ def test_retry_during_a_running_run_is_ignored(window, qtbot, tmp_path, monkeypa
     fasta = write_fasta(tmp_path / 'a.fasta')
     window.fasta_path_input.setText(fasta)
     window._failed_files = [fasta]          # as left by an earlier failed run
-    window.retry_btn.setVisible(True)
+    window.result_tabs.retry_btn.setVisible(True)
     window.start_pipeline()
     worker = window.worker
-    assert window.retry_btn.isHidden(), 'retry must not be offered while a run is going'
+    assert window.result_tabs.retry_btn.isHidden(), 'retry must not be offered while a run is going'
     wait_for_sleeper(window, qtbot)
     window._retry_failed()
     window.start_pipeline()

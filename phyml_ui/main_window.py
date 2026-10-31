@@ -1,58 +1,51 @@
-import copy
 import os
 import shutil
 from dataclasses import asdict
 from datetime import datetime
 
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                             QFormLayout, QComboBox, QLineEdit, QPushButton,
-                             QFileDialog, QMessageBox, QTabWidget,
-                             QCheckBox, QGroupBox, QLabel, QSplitter, QToolBox,
-                             QToolButton, QListWidget, QListWidgetItem,
-                             QTableWidget, QTableWidgetItem,
-                             QHeaderView, QScrollArea, QMenu, QInputDialog)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
+                             QPushButton, QMessageBox, QCheckBox, QSplitter, QScrollArea,
+                             QInputDialog, QApplication)
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon, QShortcut, QKeySequence
+from PySide6.QtGui import QIcon
 
-from phyml_core import __version__, alignment, presets, report, settings
+from phyml_core import __version__, presets, report, settings
 from phyml_core.engines import ENGINES
 from phyml_core.engines.base import format_issue
-from phyml_core.history import HistoryStore, best_tree, display_input, new_record
+from phyml_core.history import HistoryStore, best_tree, new_record
 from phyml_core.i18n import _t
 from phyml_core.paths import AppPaths
 from phyml_core.utils import detect_cores, is_mpi_binary, resource_path
-from phyml_ui.tree_viewer import TreeViewerWidget
-from phyml_ui.themes import resolve, build_qss, role_colors, PALETTES
-from phyml_ui.log_console import LogConsole
+from phyml_ui.fasta_input import FASTA_SUFFIXES, FastaInput, batch_files
+from phyml_ui.nav_panel import NavPanel
+from phyml_ui.params_panel import ParamsPanel, set_combo_by_data
+from phyml_ui.results_panel import ResultsPanel
 from phyml_ui.settings_dialog import SettingsDialog
 from phyml_ui.status_bar import AppStatusBar
+from phyml_ui.themes import resolve, build_qss, role_colors, PALETTES
+from phyml_ui.tree_viewer import TreeViewerWidget
 from phyml_ui.worker import RunWorker
 
-# queue marker per file status of the runner
-_STATUS_MARKERS = {'pending': '…', 'running': '▶', 'ok': '✓', 'fail': '✗',
-                   'cancelled': '⊘'}
 # settings that say nothing about how a run was made: left out of a history record
 _NOT_RUN_PARAMS = ('presets', 'recent', 'window')
 
 
-# --- Main Application Window ---
 class PhyMLApp(QWidget):
+    """The main window: builds the panels, keeps the settings file and the history in step
+    with them and starts / cancels / shows runs."""
+
     def __init__(self, paths=None, engines=None):
         super().__init__()
         self.paths = paths if paths is not None else AppPaths.detect()
         self.engines = ENGINES if engines is None else engines   # tests pass fakes
         self.history_store = HistoryStore(self.paths.history_file)
+        self.settings_store = settings.SettingsStore(self.paths, self._log)
         self._is_loading = True
-        self._autosave_blocked = False  # set when the settings file could not be read
-        self._save_failed = False       # the last auto_save failed (the error is logged once)
-        self._extra_settings = {}       # keys of the settings file this version does not know
-        self._history_records = []      # the records shown in history_list, same order
+        self._history_records = []      # the records shown in the history list, same order
         self.worker = None
         self.fasta_file = ""
         self._mpi_auto_path = ""
-        self._batch_mode = False
-        self._theme_setting = 'system'
-        self._accent_setting = 'green'
+        self._theme_setting, self._accent_setting = 'system', 'green'
         self.engine_setting = 'phyml'
         self._recent = []
         self._user_presets = {}
@@ -93,26 +86,8 @@ class PhyMLApp(QWidget):
 
         self.bind_autosave(self)  # after the whole tree is parented
 
-    def _build_nav_panel(self):
-        self.panel = QToolBox()
-
-        self.recent_list = QListWidget()
-        self.recent_list.itemDoubleClicked.connect(self._open_recent)
-        self.panel.addItem(self.recent_list, _t("panel_recent"))
-
-        self.presets_list = QListWidget()
-        self.presets_list.itemDoubleClicked.connect(self._preset_activated)
-        self.presets_list.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.presets_list.customContextMenuRequested.connect(self._preset_menu)
-        self.panel.addItem(self.presets_list, _t("panel_presets"))
-
-        self.history_list = QListWidget()
-        self.history_list.itemDoubleClicked.connect(self._open_history_entry)
-        self.panel.addItem(self.history_list, _t("panel_history"))
-        return self.panel
-
     def _build_middle_pane(self):
-        """FASTA input + parameter groups (each on its own plate) + controls."""
+        """FASTA input + parameter groups (each on its own plate) + navigation + controls."""
         # hidden holders for engine paths; edited via the Settings dialog
         self.phyml_path_input = QLineEdit()
         self.phyml_path_input.textChanged.connect(self.on_phyml_path_changed)
@@ -124,90 +99,27 @@ class PhyMLApp(QWidget):
         v = QVBoxLayout(middle)
         v.setContentsMargins(0, 0, 8, 0)  # breathing room from the right splitter
         v.setSpacing(8)
-
-        v.addWidget(QLabel(_t("input_fasta")))
-        self.fasta_path_input = QLineEdit()
-        btn_fasta = QPushButton(_t("btn_select_fasta"))
-        btn_fasta.clicked.connect(self.browse_fasta)
-        btn_fasta_dir = QPushButton(_t("btn_select_dir"))
-        btn_fasta_dir.clicked.connect(self.browse_fasta_dir)
-        row = QHBoxLayout(); row.addWidget(self.fasta_path_input, 1)
-        row.addWidget(btn_fasta); row.addWidget(btn_fasta_dir)
-        v.addLayout(row)
-        self.fasta_info_label = QLabel(' ')
-        self.fasta_info_label.setStyleSheet('color: #9AA0A6;')
-        self.fasta_path_input.textChanged.connect(self._update_fasta_info)
-        v.addWidget(self.fasta_info_label)
+        self.fasta = FastaInput()
+        self.fasta.path_chosen.connect(self._set_input)
+        self.fasta_path_input = self.fasta.path_edit
+        v.addWidget(self.fasta)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        plates = QWidget()
-        pv = QVBoxLayout(plates)
-        pv.setContentsMargins(0, 0, 4, 0)
-        pv.setSpacing(10)
-
-        gb_model = QGroupBox(_t("tab_model"))
-        form_basic = QFormLayout(gb_model)
-        self.chk_use_mpi = QCheckBox(_t("lbl_use_mpi"))
-        self.le_mpi_np = QLineEdit(str(self.phys_cores))
-        self.le_mpi_np.setFixedWidth(50)
-        mpi_hbox = QHBoxLayout(); mpi_hbox.addWidget(self.chk_use_mpi)
-        mpi_hbox.addWidget(QLabel(_t("lbl_mpi_np"))); mpi_hbox.addWidget(self.le_mpi_np)
-        mpi_hbox.addStretch()
-        form_basic.addRow(_t("mode_mpi"), mpi_hbox)
-
-        self.cb_datatype = QComboBox()
-        self.cb_datatype.addItem(_t("dt_nt"), "nt")
-        self.cb_datatype.addItem(_t("dt_aa"), "aa")
-        self.cb_datatype.currentIndexChanged.connect(self.update_models)
-        form_basic.addRow(_t("lbl_dt"), self.cb_datatype)
-
-        self.cb_model = QComboBox()
-        form_basic.addRow(_t("lbl_model"), self.cb_model)
-
-        self.cb_support_method = QComboBox()
-        self.cb_support_method.addItem(_t("supp_boot"), "bootstrap")
-        self.cb_support_method.addItem(_t("supp_alrt1"), "-1"); self.cb_support_method.addItem(_t("supp_alrt2"), "-2")
-        self.cb_support_method.addItem(_t("supp_alrt4"), "-4"); self.cb_support_method.addItem(_t("supp_none"), "0")
-        self.cb_support_method.currentIndexChanged.connect(self.toggle_bootstrap_input)
-        form_basic.addRow(_t("lbl_supp"), self.cb_support_method)
-
-        self.le_bootstrap_replicates = QLineEdit("100")
-        form_basic.addRow(_t("lbl_boot"), self.le_bootstrap_replicates)
-        pv.addWidget(gb_model)
-
-        gb_evo = QGroupBox(_t("tab_evo"))
-        form_model = QFormLayout(gb_evo)
-        self.cb_freq = QComboBox()
-        self.cb_freq.addItem(_t("freq_def"), "default"); self.cb_freq.addItem(_t("freq_emp"), "e"); self.cb_freq.addItem(_t("freq_ml"), "m")
-        form_model.addRow(_t("lbl_freq"), self.cb_freq)
-        self.le_tstv = QLineEdit("e"); form_model.addRow(_t("lbl_tstv"), self.le_tstv)
-        self.le_pinv = QLineEdit("0.0"); form_model.addRow(_t("lbl_pinv"), self.le_pinv)
-        self.le_classes = QLineEdit("4"); form_model.addRow(_t("lbl_classes"), self.le_classes)
-        self.le_gamma = QLineEdit("e"); form_model.addRow(_t("lbl_gamma"), self.le_gamma)
-        pv.addWidget(gb_evo)
-
-        gb_search = QGroupBox(_t("tab_search"))
-        form_tree = QFormLayout(gb_search)
-        self.cb_search = QComboBox()
-        self.cb_search.addItem(_t("search_nni"), "NNI"); self.cb_search.addItem(_t("search_spr"), "SPR"); self.cb_search.addItem(_t("search_best"), "BEST")
-        form_tree.addRow(_t("lbl_search"), self.cb_search)
-        self.cb_optimize = QComboBox()
-        self.cb_optimize.addItem(_t("opt_tlr"), "tlr"); self.cb_optimize.addItem(_t("opt_tl"), "tl"); self.cb_optimize.addItem(_t("opt_lr"), "lr")
-        self.cb_optimize.addItem(_t("opt_l"), "l"); self.cb_optimize.addItem(_t("opt_r"), "r"); self.cb_optimize.addItem(_t("opt_n"), "n")
-        form_tree.addRow(_t("lbl_opt"), self.cb_optimize)
-        self.chk_parsimony = QCheckBox(_t("chk_pars"))
-        form_tree.addRow(self.chk_parsimony)
-        pv.addWidget(gb_search)
-        pv.addStretch(1)
-
-        scroll.setWidget(plates)
+        self.params = ParamsPanel(self.phys_cores)
+        self.params.changed.connect(self.trigger_autosave)
+        scroll.setWidget(self.params)
         v.addWidget(scroll, 1)
 
         # navigation (recent/presets/history) lives at the bottom of the column
-        self._build_nav_panel()
-        self.panel.setMaximumHeight(230)
-        v.addWidget(self.panel)
+        self.nav = NavPanel()
+        self.nav.setMaximumHeight(230)
+        self.nav.recent_activated.connect(self._open_recent)
+        self.nav.preset_activated.connect(self._preset_activated)
+        self.nav.preset_save_requested.connect(self._save_preset)
+        self.nav.preset_delete_requested.connect(self._delete_preset)
+        self.nav.history_activated.connect(self._open_history_entry)
+        v.addWidget(self.nav)
 
         control_row = QHBoxLayout()
         self.btn_run = QPushButton(_t("btn_run"))
@@ -227,81 +139,54 @@ class PhyMLApp(QWidget):
         return middle
 
     def _build_right_pane(self):
-        """Big tree viewer on top, Log/Stats/Summary tabs underneath."""
+        """Big tree viewer on top, Log/Stats/Summary/Queue tabs underneath."""
         right = QWidget()
         v = QVBoxLayout(right)
         v.setContentsMargins(8, 0, 0, 0)  # breathing room from the left splitter
         self.tree_view = TreeViewerWidget()
-
-        self.result_tabs = QTabWidget()
-        self.log_console = LogConsole()
-        self.result_tabs.addTab(self.log_console, _t("tab_log"))
-
-        stats_tab = QWidget()
-        stats_lay = QVBoxLayout(stats_tab)
-        self.stats_file_label = QLabel("—")
-        self.stats_table = QTableWidget(0, 2)
-        self.stats_table.horizontalHeader().setVisible(False)
-        self.stats_table.verticalHeader().setVisible(False)
-        self.stats_table.setAlternatingRowColors(True)
-        self.stats_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.stats_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        stats_lay.addWidget(self.stats_file_label)
-        stats_lay.addWidget(self.stats_table)
-        self.result_tabs.addTab(stats_tab, _t("tab_stats"))
-
-        self.summary_table = QTableWidget(0, 8)
-        self.summary_table.verticalHeader().setVisible(False)
-        self.summary_table.setAlternatingRowColors(True)
-        self.summary_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for col in range(1, 8):
-            self.summary_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeToContents)
-        self.result_tabs.addTab(self.summary_table, _t("tab_summary"))
-
-        queue_tab = QWidget()
-        queue_lay = QVBoxLayout(queue_tab)
-        self.queue_list = QListWidget()
-        self.queue_list.setAlternatingRowColors(True)
-        self.retry_btn = QToolButton()
-        self.retry_btn.setText(_t("btn_retry_failed"))
-        self.retry_btn.setVisible(False)
-        self.retry_btn.clicked.connect(self._retry_failed)
-        queue_lay.addWidget(self.queue_list, 1)
-        queue_lay.addWidget(self.retry_btn)
-        self.result_tabs.addTab(queue_tab, _t("tab_queue"))
-
-        split = QSplitter(Qt.Vertical)
-        split.addWidget(self.tree_view)
-        split.addWidget(self.result_tabs)
-        split.setSizes([470, 260])
-        split.setChildrenCollapsible(False)
-        self.right_split = split
-        v.addWidget(split, 1)
+        self.result_tabs = ResultsPanel()
+        self.result_tabs.retry_clicked.connect(self._retry_failed)
+        self.log_console = self.result_tabs.log_console
+        self.right_split = QSplitter(Qt.Vertical)
+        self.right_split.addWidget(self.tree_view)
+        self.right_split.addWidget(self.result_tabs)
+        self.right_split.setSizes([470, 260])
+        self.right_split.setChildrenCollapsible(False)
+        v.addWidget(self.right_split, 1)
         return right
 
-    # ---------- drag & drop ----------
+    # ---------- input, drag & drop, recent ----------
+
+    def _set_input(self, path):
+        self.fasta_path_input.setText(path)
+        self.fasta_file = path
 
     def dragEnterEvent(self, event):
         urls = event.mimeData().urls()
         if urls:
             p = urls[0].toLocalFile()
-            if os.path.isdir(p) or p.lower().endswith(('.fasta', '.fas', '.fa')):
+            if os.path.isdir(p) or p.lower().endswith(FASTA_SUFFIXES):
                 event.acceptProposedAction()
 
     def dropEvent(self, event):
-        p = event.mimeData().urls()[0].toLocalFile()
-        self.fasta_path_input.setText(p)
-        self.fasta_file = p
+        self._set_input(event.mimeData().urls()[0].toLocalFile())
         event.acceptProposedAction()
 
-    # ---------- panel / theme / settings helpers ----------
+    def _remember_recent(self, path):
+        self._recent = ([path] + [p for p in self._recent if p != path])[:10]
+        self.nav.set_recent(self._recent)
+
+    def _open_recent(self, path):
+        if os.path.exists(path):
+            self._set_input(path)
+
+    # ---------- theme, settings, models ----------
 
     def open_settings(self):
         SettingsDialog(self, self).exec()
 
     def apply_theme(self, theme_setting=None, accent_setting=None):
         """Resolve settings (with 'system' support), style the app and the log."""
-        from PySide6.QtWidgets import QApplication
         if theme_setting is not None:
             self._theme_setting = theme_setting
         if accent_setting is not None:
@@ -312,88 +197,36 @@ class PhyMLApp(QWidget):
         pal = PALETTES[theme]
         self.tree_view.set_colors(pal['text'], accent, pal['base'])
 
-    def _refresh_recent(self):
-        self.recent_list.clear()
-        for p in self._recent:
-            self.recent_list.addItem(os.path.basename(p) + ('/' if os.path.isdir(p) else ''))
-
-    def _remember_recent(self, path):
-        if path in self._recent:
-            self._recent.remove(path)
-        self._recent.insert(0, path)
-        self._recent = self._recent[:10]
-        self._refresh_recent()
-
-    def _open_recent(self, item):
-        row = self.recent_list.row(item)
-        if row < len(self._recent) and os.path.exists(self._recent[row]):
-            p = self._recent[row]
-            self.fasta_path_input.setText(p)
-            self.fasta_file = p
-
-    # ---------- pipeline plumbing ----------
-
-    def closeEvent(self, event):
-        if self.worker and self.worker.isRunning():
-            # synchronous: after close the process may exit and cut off a daemon thread,
-            # leaving phyml-mpi / smpd children alive
-            self.worker.cancel(block=True)
-            self.worker.wait()
-        self.auto_save()  # persist window geometry and splitter ratios
-        event.accept()
-
-    def toggle_bootstrap_input(self):
-        is_bootstrap = self.cb_support_method.currentData() == "bootstrap"
-        self.le_bootstrap_replicates.setEnabled(is_bootstrap)
-        if not self._is_loading: self.auto_save()
-
     def update_models(self):
-        self.cb_model.clear()
         # an unknown engine in a hand-edited config gets PhyML's list, as a run uses PhyML for it
-        engine = self.engines.get(self.engine_setting) or ENGINES['phyml']
-        for m in engine.models(self.cb_datatype.currentData()):
-            self.cb_model.addItem(m, m)
-        if not self._is_loading: self.auto_save()
+        self.params.set_engine(self.engines.get(self.engine_setting) or ENGINES['phyml'])
 
-    def _update_fasta_info(self, path):
-        """Quick alignment summary under the FASTA field."""
-        try:
-            if not path or not os.path.exists(path):
-                self.fasta_info_label.setText(' ')
-                return
-            if os.path.isdir(path):
-                n = sum(1 for f in os.listdir(path)
-                        if f.lower().endswith(('.fasta', '.fas', '.fa'))
-                        and not f.lower().endswith('_aligned.fasta'))
-                self.fasta_info_label.setText(_t('fasta_info').format(n, '—', '—', '—'))
-                return
-            info = alignment.summarize(path)  # an empty or broken file raises: no label
-            self.fasta_info_label.setText(_t('fasta_info').format(
-                info['n'], info['min_len'], info['max_len'], info['gap_pct']))
-        except Exception:
-            self.fasta_info_label.setText(' ')
+    set_combo_by_data = staticmethod(set_combo_by_data)
 
-    def browse_fasta(self):
-        path, _ = QFileDialog.getOpenFileName(self, _t("file_fasta"), "", "FASTA Files (*.fasta *.fas *.fa)")
-        if path:
-            self.fasta_path_input.setText(path)
-            self.fasta_file = path
+    def on_phyml_path_changed(self, path):
+        if not is_mpi_binary(path):
+            self._mpi_auto_path = ""
+        elif not self.params.chk_use_mpi.isChecked() and self._mpi_auto_path != path:
+            self._mpi_auto_path = path
+            self.params.chk_use_mpi.setChecked(True)
+            if not self._is_loading:
+                self._log('system', _t("mpi_detected"))
 
-    def browse_fasta_dir(self):
-        path = QFileDialog.getExistingDirectory(self, _t("file_dir"))
-        if path:
-            self.fasta_path_input.setText(path)
-            self.fasta_file = path
+    # ---------- settings file ----------
 
     def bind_autosave(self, parent_widget):
         for child in parent_widget.children():
-            if isinstance(child, QLineEdit): child.textChanged.connect(self.trigger_autosave)
+            if child is self.params: continue   # it saves through params.changed
+            elif isinstance(child, QLineEdit): child.textChanged.connect(self.trigger_autosave)
             elif isinstance(child, QComboBox): child.currentIndexChanged.connect(self.trigger_autosave)
             elif isinstance(child, QCheckBox): child.toggled.connect(self.trigger_autosave)
             else: self.bind_autosave(child)
 
     def trigger_autosave(self, *args):
         if not self._is_loading: self.auto_save()
+
+    def auto_save(self):
+        self.settings_store.save(self.get_current_config())
 
     def get_current_config(self):
         return {
@@ -402,84 +235,22 @@ class PhyMLApp(QWidget):
             "phyml_path": self.phyml_path_input.text(),
             "mpirun_path": self.mpirun_path_input.text(),
             "muscle_path": self.muscle_path_input.text(),
-            "datatype": self.cb_datatype.currentData(),
-            "model": self.cb_model.currentData(),
-            "support_method": self.cb_support_method.currentData(),
-            "bootstrap_replicates": self.le_bootstrap_replicates.text(),
-            "use_mpi": self.chk_use_mpi.isChecked(),
-            "mpi_np": self.le_mpi_np.text(),
-            "freq": self.cb_freq.currentData(),
-            "tstv": self.le_tstv.text(),
-            "pinv": self.le_pinv.text(),
-            "classes": self.le_classes.text(),
-            "gamma": self.le_gamma.text(),
-            "search": self.cb_search.currentData(),
-            "optimize": self.cb_optimize.currentData(),
-            "parsimony": self.chk_parsimony.isChecked(),
+            **self.params.params(),
             "show_tree": self.chk_show_tree.isChecked(),
             "theme": self._theme_setting,
             "accent": self._accent_setting,
             "recent": self._recent,
             "presets": self._user_presets,
-            "window": {
-                "w": self.width(), "h": self.height(),
-                "splitter": self.splitter.sizes(),
-                "vsplit": self.right_split.sizes(),
-            }
+            "window": {"w": self.width(), "h": self.height(),
+                       "splitter": self.splitter.sizes(), "vsplit": self.right_split.sizes()},
         }
-
-    def _log(self, level, text):
-        """A log line at the given level; messages from the core modules may end with a newline."""
-        self.log_console.append(level, text.rstrip('\n'))
-
-    def auto_save(self):
-        if self._autosave_blocked:
-            return
-        data = dict(self._extra_settings)
-        data.update(settings.to_disk(self.get_current_config(), self.paths))
-        data['schema_version'] = settings.SCHEMA_VERSION
-        try:
-            settings.save(self.paths.config_file, data)
-            self._save_failed = False
-        except OSError as e:
-            if not self._save_failed:   # every field change saves: report a failure once
-                self._log('error', _t('err_settings_save').format(e))
-            self._save_failed = True
-
-    def _migrate_legacy_files(self):
-        """Copy config/history from the working folder of older versions, once."""
-        try:
-            cwd = os.getcwd()
-            copied = settings.migrate_legacy(self.paths, cwd)
-        except OSError as e:
-            self._log('error', _t('err_load').format(e))
-            if not os.path.exists(self.paths.config_file):
-                # Saving the defaults now would create the config that closes the migration
-                # gate, and the legacy settings would never be copied.
-                self._autosave_blocked = True
-            return
-        for name in copied:
-            self._log('system', _t('settings_migrated').format(
-                os.path.join(cwd, name), os.path.join(self.paths.data_dir, name)))
 
     def load_config(self):
         self.update_models()
-        self._migrate_legacy_files()
-        problems = []
-        try:
-            raw = settings.load(self.paths.config_file, on_error=problems.append)
-        except OSError as e:
-            # The file is there but unreadable: work with defaults, but never save them
-            # over the user's real settings.
-            self._autosave_blocked = True
-            problems.append(_t('err_load').format(e))
-            raw = copy.deepcopy(settings.DEFAULTS)
-        for message in problems:
-            self._log('error', message)
-        self._extra_settings = {k: v for k, v in raw.items() if k not in settings.DEFAULTS}
+        raw, clean = self.settings_store.load()
         try:
             self._apply_config(settings.from_disk(raw, self.paths))
-            if not problems and os.path.isfile(self.paths.config_file):
+            if clean and os.path.isfile(self.paths.config_file):
                 self._log('system', _t("sys_load"))
         except Exception as e:
             self._log('error', _t("err_load").format(e))
@@ -497,42 +268,26 @@ class PhyMLApp(QWidget):
             mpirun = shutil.which("mpiexec") or shutil.which("mpirun") or mpirun
         self.mpirun_path_input.setText(mpirun)
         self.muscle_path_input.setText(config["muscle_path"])
-        self._apply_model_params(config)
-        self.chk_use_mpi.setChecked(config["use_mpi"])
-        self.le_mpi_np.setText(config["mpi_np"] or str(self.phys_cores))  # '' = physical cores
+        self.update_models()
+        self.params.set_params(dict(presets.extract(config), use_mpi=config["use_mpi"],
+                                    mpi_np=config["mpi_np"] or str(self.phys_cores)))  # '' = cores
         self.chk_show_tree.setChecked(config["show_tree"])
         self._recent = [p for p in config["recent"] if isinstance(p, str) and os.path.exists(p)]
-        self._refresh_recent()
+        self.nav.set_recent(self._recent)
         self._user_presets = dict(config["presets"])
         self.apply_theme(config["theme"], config["accent"])
         win = config["window"]
         if win.get("w") and win.get("h"):
             self.resize(min(win["w"], 4096), min(win["h"], 4096))
-        if isinstance(win.get("splitter"), list) and len(win["splitter"]) == 2:
-            self.splitter.setSizes(win["splitter"])
-        if isinstance(win.get("vsplit"), list) and len(win["vsplit"]) == 2:
-            self.right_split.setSizes(win["vsplit"])
-        self.toggle_bootstrap_input()
+        for key, split in (("splitter", self.splitter), ("vsplit", self.right_split)):
+            if isinstance(win.get(key), list) and len(win[key]) == 2:
+                split.setSizes(win[key])
 
-    def _apply_model_params(self, params):
-        """Show the model and search parameters (the part presets also carry)."""
-        self.set_combo_by_data(self.cb_datatype, params["datatype"])
-        self.update_models()
-        self.set_combo_by_data(self.cb_model, params["model"])
-        self.set_combo_by_data(self.cb_freq, params["freq"])
-        self.set_combo_by_data(self.cb_support_method, params["support_method"])
-        self.set_combo_by_data(self.cb_search, params["search"])
-        self.set_combo_by_data(self.cb_optimize, params["optimize"])
-        self.le_bootstrap_replicates.setText(params["bootstrap_replicates"])
-        self.le_tstv.setText(params["tstv"])
-        self.le_pinv.setText(params["pinv"])
-        self.le_classes.setText(params["classes"])
-        self.le_gamma.setText(params["gamma"])
-        self.chk_parsimony.setChecked(params["parsimony"])
+    # ---------- runs ----------
 
-    def set_combo_by_data(self, combo, data_val):
-        idx = combo.findData(data_val)
-        if idx >= 0: combo.setCurrentIndex(idx)
+    def _log(self, level, text):
+        """A log line at the given level; messages from the core modules may end with a newline."""
+        self.log_console.append(level, text.rstrip('\n'))
 
     def start_pipeline(self, files_override=None):
         if self.worker is not None and self.worker.isRunning():
@@ -543,18 +298,10 @@ class PhyMLApp(QWidget):
             target = self.fasta_path_input.text() or self.fasta_file
             if not target or not os.path.exists(target):
                 QMessageBox.warning(self, _t("err_box_title"), _t("err_box_msg")); return
-            if os.path.isdir(target):
-                # skip *_aligned.fasta: those are this app's own MUSCLE outputs
-                files = sorted(f for f in os.listdir(target)
-                               if f.lower().endswith(('.fasta', '.fas', '.fa'))
-                               and not f.lower().endswith('_aligned.fasta'))
-                if not files:
-                    QMessageBox.warning(self, _t("err_box_title"), _t("batch_empty")); return
-                files = [os.path.join(target, f) for f in files]
-                out_dir = target
-            else:
-                files = [target]
-                out_dir = os.path.dirname(os.path.abspath(target))
+            files = batch_files(target) if os.path.isdir(target) else [target]
+            if not files:
+                QMessageBox.warning(self, _t("err_box_title"), _t("batch_empty")); return
+            out_dir = target if os.path.isdir(target) else os.path.dirname(os.path.abspath(target))
             inputs = [target]
         else:
             files = list(files_override)
@@ -572,23 +319,16 @@ class PhyMLApp(QWidget):
             QMessageBox.warning(self, _t('err_box_title'),
                                 '\n'.join(format_issue(issue) for issue in errors))
             return
-        self._batch_mode = len(files) > 1
         self._remember_recent(target)
         if not self._is_loading: self.auto_save()
-        self.btn_run.setEnabled(False); self.btn_cancel.setEnabled(True); self.log_console.clear()
-        self.retry_btn.setVisible(False)
-        self.result_tabs.setCurrentWidget(self.log_console)
-        self._populate_queue(files)
-        if self._batch_mode:
-            self.result_tabs.setCurrentWidget(self.queue_list.parentWidget())
+        self.btn_run.setEnabled(False); self.btn_cancel.setEnabled(True)
+        self.result_tabs.begin_run(files)
         self.status.track(self._active_pid)
         self._run_started = datetime.now()
-        self._run_config = config
-        self._run_inputs = inputs
-        self._run_out_dir = out_dir
+        self._run_config, self._run_inputs, self._run_out_dir = config, inputs, out_dir
         self.worker = RunWorker.for_run(config, files, self.paths, engines=self.engines)
         self.worker.log.connect(self._log)
-        self.worker.status.connect(self._on_file_status)
+        self.worker.status.connect(self.result_tabs.set_file_status)
         self.worker.done.connect(self.pipeline_finished)
         self.worker.start()
 
@@ -604,6 +344,15 @@ class PhyMLApp(QWidget):
             self.btn_cancel.setEnabled(False)
             self._log('error', _t("sys_interrupt"))
 
+    def closeEvent(self, event):
+        if self.worker and self.worker.isRunning():
+            # synchronous: after close the process may exit and cut off a daemon thread,
+            # leaving phyml-mpi / smpd children alive
+            self.worker.cancel(block=True)
+            self.worker.wait()
+        self.auto_save()  # persist window geometry and splitter ratios
+        event.accept()
+
     def pipeline_finished(self, result):
         """Show a finished run (a RunResult): tables, summary files, history, retry, tree."""
         if self.worker is not None:
@@ -613,12 +362,11 @@ class PhyMLApp(QWidget):
         self.status.stop_tracking()
         if result.files:
             rows = report.summary_rows(result.files)
-            self._populate_stats(result)
-            self._populate_summary(rows)
+            self.result_tabs.show_result(result, rows)
             self._write_summary(rows)
         self._append_history(result)
         self._failed_files = [f.file for f in result.files if f.status == 'fail']
-        self.retry_btn.setVisible(bool(self._failed_files))
+        self.result_tabs.retry_btn.setVisible(bool(self._failed_files))
         self._last_out_dir = self._run_out_dir
         self.status.set_open_dir_enabled(self._last_out_dir is not None)
         if result.success and self.chk_show_tree.isChecked():
@@ -636,21 +384,6 @@ class PhyMLApp(QWidget):
         for path in written:
             key = 'xlsx_saved' if path.lower().endswith('.xlsx') else 'summary_saved'
             self._log('success', _t(key).format(path))
-
-    # ---------- queue ----------
-
-    def _populate_queue(self, files):
-        self.queue_list.clear()
-        for f in files:
-            self.queue_list.addItem(os.path.basename(f) + '  …')
-
-    def _on_file_status(self, name, status):
-        marker = _STATUS_MARKERS.get(status, '?')
-        for i in range(self.queue_list.count()):
-            item = self.queue_list.item(i)
-            if item.text().split('  ')[0] == name:
-                item.setText(f'{name}  {marker}')
-                return
 
     def _retry_failed(self):
         if self._failed_files:
@@ -679,19 +412,15 @@ class PhyMLApp(QWidget):
         self._refresh_history()
 
     def _refresh_history(self):
-        self.history_list.clear()
         try:
             self._history_records = self.history_store.load(
                 on_error=lambda message: self._log('error', message))[:50]
         except OSError as e:
             self._history_records = []
             self._log('error', _t('err_load').format(e))
-        for rec in self._history_records:
-            self.history_list.addItem(_t('hist_entry').format(
-                rec.get('ts', ''), display_input(rec), rec.get('ok', 0), rec.get('n', 0)))
+        self.nav.set_history(self._history_records)
 
-    def _open_history_entry(self, item):
-        row = self.history_list.row(item)
+    def _open_history_entry(self, row):
         if row >= len(self._history_records):
             return
         tree = best_tree(self._history_records[row])
@@ -703,39 +432,19 @@ class PhyMLApp(QWidget):
     # ---------- presets ----------
 
     def _refresh_presets(self):
-        self.presets_list.clear()
-        save_item = QListWidgetItem(_t('preset_save_current'))
-        save_item.setData(Qt.UserRole, '__save__')
-        self.presets_list.addItem(save_item)
-        for label_key in presets.BUILTIN:
-            it = QListWidgetItem(_t(label_key))
-            it.setData(Qt.UserRole, ('builtin', label_key))
-            self.presets_list.addItem(it)
-        for name in self._user_presets:
-            it = QListWidgetItem(name)
-            it.setData(Qt.UserRole, ('user', name))
-            self.presets_list.addItem(it)
+        self.nav.set_presets(presets.BUILTIN, self._user_presets)
 
-    def _preset_activated(self, item):
-        data = item.data(Qt.UserRole)
-        if data == '__save__':
-            self._save_preset()
-            return
-        kind, key = data
-        preset = presets.BUILTIN[key] if kind == 'builtin' else self._user_presets.get(key, {})
-        self._apply_preset(preset)
-        self._log('success', _t('preset_applied').format(item.text()))
-
-    def _apply_preset(self, preset):
+    def _preset_activated(self, preset):
         params = presets.apply(preset, self.get_current_config())
-        self._is_loading = True
+        self._is_loading = True   # one save for the whole preset, after it is shown
         try:
             self.engine_setting = params['engine']
-            self._apply_model_params(params)
+            self.update_models()
+            self.params.set_params(presets.extract(params))
         finally:
             self._is_loading = False
-        self.toggle_bootstrap_input()
         self.auto_save()
+        self._log('success', _t('preset_applied').format(self.nav.activated_preset_name))
 
     def _save_preset(self):
         name, ok = QInputDialog.getText(self, _t('preset_save_current'), _t('preset_prompt'))
@@ -747,51 +456,7 @@ class PhyMLApp(QWidget):
         self._refresh_presets()
         self._log('success', _t('preset_saved').format(name))
 
-    def _preset_menu(self, pos):
-        item = self.presets_list.itemAt(pos)
-        if item is None:
-            return
-        data = item.data(Qt.UserRole)
-        if not (isinstance(data, tuple) and data[0] == 'user'):
-            return
-        menu = QMenu(self)
-        act = menu.addAction(_t('preset_delete'))
-        if menu.exec(self.presets_list.mapToGlobal(pos)) == act:
-            self._user_presets.pop(data[1], None)
-            self.auto_save()
-            self._refresh_presets()
-
-    def _populate_stats(self, result):
-        """The statistics of the last file that finished 'ok'."""
-        done = [f for f in result.files if f.status == 'ok']
-        if not done:
-            return
-        last = done[-1]
-        self.stats_file_label.setText(_t("stats_field_file") + ': ' + os.path.basename(last.file))
-        fields = [('stats_field_model', 'model'), ('stats_field_taxa', 'taxa'),
-                  ('stats_field_lnl', 'lnL'), ('stats_field_gamma', 'gamma'),
-                  ('stats_field_tstv', 'tstv'), ('stats_field_time', 'time')]
-        self.stats_table.setRowCount(len(fields))
-        for i, (key, col) in enumerate(fields):
-            self.stats_table.setItem(i, 0, QTableWidgetItem(_t(key)))
-            self.stats_table.setItem(i, 1, QTableWidgetItem((last.stats or {}).get(col) or 'n/a'))
-
-    def _populate_summary(self, rows):
-        cols = ['file', 'status', 'model', 'taxa', 'lnL', 'gamma', 'tstv', 'time']
-        heads = [_t("sum_col_" + c) for c in cols]
-        self.summary_table.setColumnCount(len(cols))
-        self.summary_table.setHorizontalHeaderLabels(heads)
-        self.summary_table.setRowCount(len(rows))
-        for i, r in enumerate(rows):
-            for j, c in enumerate(cols):
-                self.summary_table.setItem(i, j, QTableWidgetItem(r.get(c) or ''))
-
-    def on_phyml_path_changed(self, path):
-        if is_mpi_binary(path):
-            if not self.chk_use_mpi.isChecked() and self._mpi_auto_path != path:
-                self._mpi_auto_path = path
-                self.chk_use_mpi.setChecked(True)
-                if not self._is_loading:
-                    self._log('system', _t("mpi_detected"))
-        else:
-            self._mpi_auto_path = ""
+    def _delete_preset(self, name):
+        self._user_presets.pop(name, None)
+        self.auto_save()
+        self._refresh_presets()
