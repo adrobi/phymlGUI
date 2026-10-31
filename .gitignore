@@ -13,3 +13,4 @@ release_body.md
 release.json
 release_resp.json
 asset_resp.json
+/bin/

@@ -6,14 +6,29 @@ on:
   pull_request:
 
 jobs:
-  smoke:
+  test:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.13']
+    env:
+      QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
-      - name: Tests (no analysis binaries)
-        run: python -m pytest tests/unit tests/gui
+      - name: Cache pinned IQ-TREE and MUSCLE
+        id: third-party
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: third-party-${{ hashFiles('packaging/third_party.json') }}
+      - name: Fetch pinned IQ-TREE and MUSCLE
+        if: steps.third-party.outputs.cache-hit != 'true'
+        run: python scripts/fetch_third_party.py --dest bin
+      - name: Tests
+        run: python -m pytest -q -rs

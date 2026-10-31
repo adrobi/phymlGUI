@@ -1,4 +1,5 @@
 """IQ-TREE engine, ModelFinder and the XLSX summary."""
+import dataclasses
 import random
 import re
 import shutil
@@ -74,11 +75,13 @@ def test_100_replicates_raised_to_1000(qapp, monkeypatch, binaries, run_dir):
     assert any(' -B 1000' in line for line in logs), 'UFBoot replicates were not raised to 1000'
 
 
-def test_gui_validation_and_run_with_xlsx(window, warned, qtbot, binaries, run_dir):
+def test_gui_validation_and_run_with_xlsx(window, warned, qtbot, binaries, run_dir, monkeypatch):
     """GUI: engine validation, model list, full run + xlsx summary."""
     window.engine_setting = 'iqtree'
     window.update_models()
     assert window.params.cb_model.currentData() == 'MFP'
+    # an app folder without bin/: an empty field would otherwise find bin/iqtree2.exe
+    monkeypatch.setattr(window, 'paths', dataclasses.replace(window.paths, app_dir=str(run_dir)))
     window.iqtree_path_input.setText('')  # no binary -> blocked with warning
     window.fasta_path_input.setText(str(run_dir / 'test_prealigned.fasta'))
     window.start_pipeline()

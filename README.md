@@ -23,8 +23,17 @@
 
 ### ⚙️ Requirements
 * **Executables:** `phyml.exe` (or MPI version) and `muscle.exe`.
-* **Python packages:** Python 3.9+ with `PySide6`, `matplotlib`, `biopython` and `psutil` (`pip install -r requirements.txt`).
+* **Python packages:** Python 3.11+ with `PySide6`, `matplotlib`, `biopython` and `psutil` (`pip install -r requirements.txt`).
 * **MPI Environment:** For parallel mode, **Microsoft MPI** is required (install `msmpisetup.exe` from the official Microsoft GitHub).
+* **Settings and history:** stored next to the exe when that folder is writable, otherwise in `%APPDATA%\phymlGUI`. Set `PHYMLGUI_DATA_DIR` to use another folder.
+
+### 🧪 Tests
+```
+pip install -r requirements.txt -r requirements-dev.txt
+python scripts/fetch_third_party.py --dest bin   # pinned IQ-TREE and MUSCLE (SHA256-verified)
+python -m pytest
+```
+Analysis binaries are looked up in `bin/` and in the variables `PHYMLGUI_PHYML`, `PHYMLGUI_MPIEXEC`, `PHYMLGUI_IQTREE`, `PHYMLGUI_MUSCLE`, `PHYMLGUI_RAXML` (full path to the executable). Tests that need a missing binary are skipped. Markers: `needs_phyml`, `needs_mpi`, `needs_iqtree`, `needs_muscle`, `slow`; e.g. `python -m pytest -m "not needs_phyml and not needs_mpi"` is what CI runs without PhyML/MPI. Tests never touch your real settings: they use an isolated data folder.
 
 ---
 
@@ -47,8 +56,17 @@
 
 ### ⚙️ Требования
 * **Программные файлы:** `phyml.exe` (или MPI-версия) и `muscle.exe`.
-* **Python-зависимости:** Python 3.9+ с пакетами `PySide6`, `matplotlib`, `biopython` и `psutil` (`pip install -r requirements.txt`).
+* **Python-зависимости:** Python 3.11+ с пакетами `PySide6`, `matplotlib`, `biopython` и `psutil` (`pip install -r requirements.txt`).
 * **Среда MPI:** Для работы в параллельном режиме требуется установленный **Microsoft MPI** (инсталлятор `msmpisetup.exe` можно найти на официальном GitHub Microsoft).
+* **Настройки и история:** хранятся рядом с exe, если папка доступна для записи, иначе в `%APPDATA%\phymlGUI`. Другую папку можно задать переменной `PHYMLGUI_DATA_DIR`.
+
+### 🧪 Тесты
+```
+pip install -r requirements.txt -r requirements-dev.txt
+python scripts/fetch_third_party.py --dest bin   # закреплённые IQ-TREE и MUSCLE (проверка SHA256)
+python -m pytest
+```
+Бинарники анализа ищутся в `bin/` и в переменных `PHYMLGUI_PHYML`, `PHYMLGUI_MPIEXEC`, `PHYMLGUI_IQTREE`, `PHYMLGUI_MUSCLE`, `PHYMLGUI_RAXML` (полный путь к exe). Тесты, которым нужен отсутствующий бинарник, пропускаются. Маркеры: `needs_phyml`, `needs_mpi`, `needs_iqtree`, `needs_muscle`, `slow`; например `python -m pytest -m "not needs_phyml and not needs_mpi"` — запуск CI без PhyML/MPI. Тесты не трогают ваши настройки: они работают в изолированной папке данных.
 
 ---
 
