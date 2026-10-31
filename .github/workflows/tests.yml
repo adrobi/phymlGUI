@@ -48,39 +48,7 @@ jobs:
         run: |
           set +e
           try() { echo "--- $1"; sh -c "$2" > /tmp/out.txt 2>&1; echo "exit=$?"; grep -a -E "Fatal|passed|failed|rror" /tmp/out.txt | head -3; }
-          cat > /tmp/refs.py <<'EOF'
-          import gc, os, subprocess, sys
-          import psutil
-          print('psutil', psutil.__version__, sys.version)
-          gc.disable()
-          child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
-          proc = psutil.Process(child.pid)
-          def wait0():
-              try:
-                  proc.wait(timeout=0)
-              except psutil.TimeoutExpired:
-                  pass
-          def wait_short():
-              try:
-                  proc.wait(timeout=0.001)
-              except psutil.TimeoutExpired:
-                  pass
-          calls = {
-              'Process.wait(timeout=0)': wait0,
-              'Process.wait(timeout=0.001)': wait_short,
-              'wait_procs([p], 0)': lambda: psutil.wait_procs([proc], timeout=0),
-              'wait_procs([p], 0.001)': lambda: psutil.wait_procs([proc], timeout=0.001),
-              'children(recursive)': lambda: psutil.Process(os.getpid()).children(recursive=True),
-          }
-          for name, call in calls.items():
-              for n in (100, 400):
-                  t0, f0 = sys.getrefcount(True), sys.getrefcount(False)
-                  for _ in range(n):
-                      call()
-                  print(f'{name:30} n={n:4} dTrue={sys.getrefcount(True) - t0:+6} dFalse={sys.getrefcount(False) - f0:+6}')
-          child.kill()
-          EOF
-          python /tmp/refs.py
+          PYTHONPATH=tests python -m pytest -q -s -p no:cacheprovider -p refcount_probe tests/gui/test_main_window.py tests/gui/test_main_window_smoke.py tests/e2e/test_cpu_monitor.py tests/gui/test_main_window_storage.py 2>&1 | grep -a -E 'REFPROBE|passed|failed|Fatal'
           true
       - name: Tests
         run: python -m pytest -q -rs
