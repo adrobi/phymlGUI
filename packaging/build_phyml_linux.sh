@@ -12,19 +12,32 @@ trap 'rm -rf "$work"' EXIT
 tar -xzf "$src_archive" -C "$work"
 cd "$work"/phyml-*
 
+# configure.ac compiles with -march=native: a binary built on the CI runner dies with
+# SIGILL on an older CPU. x86-64-v2 (SSE4.2, every x86-64 CPU since about 2009) keeps
+# PhyML's SSE likelihood code; --disable-native would drop vectorisation altogether.
+sed -i 's/-march=native/-march=x86-64-v2/; s/-mcpu=native/-march=x86-64-v2/' configure.ac
+
 # the release tarball ships a stale configured tree: regenerate from scratch
 make distclean >/dev/null 2>&1 || true
 sh ./autogen.sh
 
-# no --enable-native: the binaries must run on any x86-64 CPU.
+no_native() {
+  if grep -rq -e '-march=native' -e '-mcpu=native' --include=Makefile .; then
+    echo 'build_phyml_linux.sh: -march=native is still in the Makefiles' >&2
+    exit 1
+  fi
+}
+
 # Single-threaded make: parallel builds crashed GCC (internal compiler error
 # in evolve.c) on Ubuntu 26.04; -j1 is reliable everywhere.
 ./configure --enable-phyml
+no_native
 make -j1
 install -m 755 src/phyml "$dest/phyml"
 
 make distclean >/dev/null
 ./configure --enable-phyml-mpi
+no_native
 make -j1
 install -m 755 src/phyml-mpi "$dest/phyml-mpi"
 
