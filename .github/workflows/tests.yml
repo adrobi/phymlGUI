@@ -13,8 +13,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-22.04]
-        python-version: ['3.11', '3.13']
+        # Linux starts at 3.12: on 3.11 a C extension's True/False over-decref aborts
+        # the interpreter at exit (bool_dealloc); 3.12+ makes those objects immortal
+        include:
+          - {os: windows-latest, python-version: '3.11'}
+          - {os: windows-latest, python-version: '3.13'}
+          - {os: ubuntu-22.04, python-version: '3.12'}
+          - {os: ubuntu-22.04, python-version: '3.13'}
     env:
       QT_QPA_PLATFORM: offscreen
     steps:

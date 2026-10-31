@@ -23,10 +23,10 @@
 
 ### ⚙️ Requirements
 * **Executables:** `phyml.exe` (or MPI version) and `muscle.exe`.
-* **Python packages:** Python 3.11+ with `PySide6`, `matplotlib`, `biopython` and `psutil` (`pip install -r requirements.txt`).
+* **Python packages:** Python 3.11+ (3.12+ on Linux) with `PySide6`, `matplotlib`, `biopython` and `psutil` (`pip install -r requirements.txt`).
 * **MPI Environment:** PhyML on Windows needs **Microsoft MPI** (install `msmpisetup.exe` from the official Microsoft GitHub), also for serial runs: the bundled PhyML is an MPI build.
 * **Settings and history:** stored next to the exe when that folder is writable, otherwise in `%APPDATA%\phymlGUI` (Windows) or `~/.config/phymlGUI` (Linux, `$XDG_CONFIG_HOME`). Set `PHYMLGUI_DATA_DIR` to use another folder.
-* **Linux:** the same app runs on Linux. Tool names have no `.exe`; tools are found in `bin/` next to the app, then on `PATH`. MPI mode needs OpenMPI (`sudo apt install openmpi-bin`) and uses `mpirun`.
+* **Linux:** the same app runs on Linux. Tool names have no `.exe`; tools are found in `bin/` next to the app, then on `PATH`. MPI mode needs OpenMPI (`sudo apt install openmpi-bin`) and uses `mpirun`. Running from source on Linux needs Python 3.12+: with Python 3.11 the interpreter aborts on exit (`bool_dealloc`, a reference-count bug in a C extension that 3.12+ does not trip over).
 
 ### 🧪 Tests
 ```
@@ -57,10 +57,10 @@ Analysis binaries are looked up in `bin/` and in the variables `PHYMLGUI_PHYML`,
 
 ### ⚙️ Требования
 * **Программные файлы:** `phyml.exe` (или MPI-версия) и `muscle.exe`.
-* **Python-зависимости:** Python 3.11+ с пакетами `PySide6`, `matplotlib`, `biopython` и `psutil` (`pip install -r requirements.txt`).
+* **Python-зависимости:** Python 3.11+ (под Linux 3.12+) с пакетами `PySide6`, `matplotlib`, `biopython` и `psutil` (`pip install -r requirements.txt`).
 * **Среда MPI:** PhyML под Windows требует установленный **Microsoft MPI** (инсталлятор `msmpisetup.exe` можно найти на официальном GitHub Microsoft), в том числе для последовательного режима: встроенный PhyML собран с MPI.
 * **Настройки и история:** хранятся рядом с exe, если папка доступна для записи, иначе в `%APPDATA%\phymlGUI` (Windows) или `~/.config/phymlGUI` (Linux, `$XDG_CONFIG_HOME`). Другую папку можно задать переменной `PHYMLGUI_DATA_DIR`.
-* **Linux:** то же приложение работает под Linux. Имена программ без `.exe`; они ищутся в `bin/` рядом с приложением, затем в `PATH`. Для MPI-режима нужен OpenMPI (`sudo apt install openmpi-bin`), используется `mpirun`.
+* **Linux:** то же приложение работает под Linux. Имена программ без `.exe`; они ищутся в `bin/` рядом с приложением, затем в `PATH`. Для MPI-режима нужен OpenMPI (`sudo apt install openmpi-bin`), используется `mpirun`. Для запуска из исходников под Linux нужен Python 3.12+: с Python 3.11 интерпретатор аварийно завершается при выходе (`bool_dealloc`, ошибка счётчика ссылок в C-расширении, на которую 3.12+ не натыкается).
 
 ### 🧪 Тесты
 ```
