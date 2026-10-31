@@ -14,7 +14,10 @@ NT_MODELS = ("HKY85", "JC69", "K80", "F81", "F84", "TN93", "GTR", "custom")
 AA_MODELS = ("LG", "WAG", "JTT", "MtREV", "Dayhoff", "DCMut", "RtREV", "CPREV", "VT", "Blosum62",
              "MtMam", "MtArt", "HIVw", "HIVb", "custom")
 
-EXECUTABLE_BASES = ('phyml-mpi', 'phyml')
+# the build matching the MPI mode comes first; the other one is the fallback
+# (the Windows zip ships only phyml-mpi.exe, the AppImage ships both)
+EXECUTABLE_BASES = ('phyml', 'phyml-mpi')
+MPI_EXECUTABLE_BASES = ('phyml-mpi', 'phyml')
 
 
 def parse_phyml_stats(stats_path: str) -> dict:
@@ -102,7 +105,8 @@ class PhyML(Engine):
         return dict(params), []
 
     def executable(self, params: dict, paths: AppPaths) -> str:
-        return paths.find_tool(params.get('phyml_path', ''), tuple(exe_name(b) for b in EXECUTABLE_BASES))
+        bases = MPI_EXECUTABLE_BASES if params.get('use_mpi') else EXECUTABLE_BASES
+        return paths.find_tool(params.get('phyml_path', ''), tuple(exe_name(b) for b in bases))
 
     def command(self, exe: str, phylip: str, params: dict) -> List[str]:
         argv = [exe, '-i', phylip,

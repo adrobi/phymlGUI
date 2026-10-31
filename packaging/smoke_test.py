@@ -41,7 +41,7 @@ def _run(argv, env, timeout=600):
 
 
 def _analysis(cli, env, work, name, overlay):
-    from datasets import make_dataset, write_fasta
+    from dataset_gen import make_dataset, write_fasta
     names, _, unaligned = make_dataset()
     folder = os.path.join(work, name)
     os.makedirs(folder)
@@ -74,7 +74,9 @@ def main(argv=None):
 
         base = {'datatype': 'nt', 'model': 'HKY85', 'mpi_np': '2', 'use_mpi': False}
         checks = [
-            ('phyml', dict(base, engine='phyml', support_method='-4')),
+            # bootstrap without MPI needs the serial build, which only the AppImage bundles
+            ('phyml', dict(base, engine='phyml', support_method='-4') if args.package.endswith('.zip')
+             else dict(base, engine='phyml', support_method='bootstrap', bootstrap_replicates='4')),
             ('iqtree', dict(base, engine='iqtree', model='MFP', support_method='-4')),
         ]
         if args.mpi:

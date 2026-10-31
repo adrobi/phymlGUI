@@ -96,7 +96,7 @@ def run(exe, out):
     """Run the parity analyses with exe into out (inputs are generated here)."""
     sys.path.insert(0, os.path.join(ROOT, 'tests', 'e2e'))
     sys.path.insert(0, ROOT)
-    from datasets import make_dataset, write_fasta
+    from dataset_gen import make_dataset, write_fasta
     from phyml_core import alignment
     os.makedirs(out, exist_ok=True)
     names, aligned, _ = make_dataset()
@@ -106,7 +106,8 @@ def run(exe, out):
     alignment.write_phylip(alignment.read_fasta(fasta), phy)
     with open(os.path.join(out, 'fixed.tree'), 'w') as f:
         f.write(FIXED_TREE + '\n')
-    common = ['--msa', 'parity.phy', '--seed', '42', '--redo']
+    # the same SIMD kernel on both runners: RAxML-NG otherwise picks one per CPU
+    common = ['--msa', 'parity.phy', '--seed', '42', '--redo', '--simd', 'avx2']
     runs = [
         ['--search', *common, '--model', 'GTR+G', '--threads', '1', '--prefix', 'search'],
         ['--bootstrap', *common, '--model', 'GTR+G', '--threads', '2', '--bs-trees', '50',

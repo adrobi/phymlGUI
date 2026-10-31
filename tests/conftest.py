@@ -44,7 +44,8 @@ def find_binary(kind):
     if os.environ.get(env_var):
         candidates.append(Path(os.environ[env_var]))
     candidates.append(ROOT / 'bin' / exe_name(base))
-    candidates.extend(local)
+    if os.name == 'nt':   # the extra local locations are Windows installs
+        candidates.extend(local)
     for path in candidates:
         if path.is_file():
             return str(path)

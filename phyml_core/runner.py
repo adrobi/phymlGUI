@@ -282,6 +282,7 @@ class PipelineRunner:
                 raise _Cancelled(cancel_key)
             proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, errors='replace',
+                                    env=utils.child_env(),
                                     creationflags=_CREATION_FLAGS)
             self._proc = proc
         try:

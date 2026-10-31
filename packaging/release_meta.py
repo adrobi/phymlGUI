@@ -25,7 +25,8 @@ NOTES = """phymlGUI {version}
 
 Downloads:
 - `phymlGUI-{version}-windows-x64.zip` - unpack and start `phymlgui.exe`
-  (command line: `phymlgui-cli.exe`). MPI mode of PhyML needs Microsoft MPI.
+  (command line: `phymlgui-cli.exe`). PhyML needs Microsoft MPI
+  (also for serial runs: the bundled PhyML is an MPI build).
 - `phymlGUI-{version}-x86_64.AppImage` - `chmod +x` and run; without FUSE use
   `--appimage-extract-and-run`. MPI mode needs OpenMPI (`sudo apt install openmpi-bin`).
 - `SHA256SUMS` - checksums of the files above.

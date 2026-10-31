@@ -240,11 +240,24 @@ def test_executable_falls_back_to_bin(paths):
     assert PhyML().executable({}, paths) == bin_exe
 
 
-def test_executable_prefers_the_mpi_build_in_bin(paths):
+def test_executable_picks_the_build_matching_the_mpi_mode(paths):
     os.makedirs(paths.bin_dir)
     for name in (exe_name('phyml'), exe_name('phyml-mpi')):
         open(os.path.join(paths.bin_dir, name), 'wb').close()
-    assert PhyML().executable({}, paths) == os.path.join(paths.bin_dir, exe_name('phyml-mpi'))
+    assert PhyML().executable({'use_mpi': True}, paths) == os.path.join(paths.bin_dir, exe_name('phyml-mpi'))
+    serial = os.path.join(paths.bin_dir, exe_name('phyml'))
+    assert PhyML().executable({'use_mpi': False}, paths) == serial
+    assert PhyML().executable({}, paths) == serial
+
+
+def test_serial_bootstrap_is_valid_when_the_serial_build_is_bundled(paths):
+    """AppImage ships phyml and phyml-mpi: defaults (bootstrap, no MPI) must use phyml."""
+    os.makedirs(paths.bin_dir)
+    for name in (exe_name('phyml'), exe_name('phyml-mpi')):
+        with open(os.path.join(paths.bin_dir, name), 'wb') as f:
+            f.write(b'MPI_Init' if name.startswith('phyml-mpi') else b'serial')
+    issues = PhyML().validate({'use_mpi': False, 'support_method': 'bootstrap'}, paths)
+    assert [i.key for i in issues] == []
 
 
 def test_executable_resolves_a_stored_relative_path(paths):

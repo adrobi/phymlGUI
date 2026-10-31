@@ -393,8 +393,16 @@ class PhyMLApp(QWidget):
         if self._last_out_dir and os.path.isdir(self._last_out_dir):
             if utils.IS_WINDOWS:
                 os.startfile(self._last_out_dir)
-            else:   # xdg-open, also from inside an AppImage
-                QDesktopServices.openUrl(QUrl.fromLocalFile(self._last_out_dir))
+            else:   # xdg-open, also from inside an AppImage: it inherits os.environ,
+                # so hand it the environment without the bundle's LD_LIBRARY_PATH
+                saved = dict(os.environ)
+                os.environ.clear()
+                os.environ.update(utils.child_env())
+                try:
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(self._last_out_dir))
+                finally:
+                    os.environ.clear()
+                    os.environ.update(saved)
 
     # ---------- history ----------
 

@@ -153,6 +153,10 @@ jobs:
         with:
           name: bin-windows
           path: bin
+      - name: Install Microsoft MPI (the bundled phyml-mpi.exe needs msmpi.dll)
+        run: |
+          python scripts/fetch_third_party.py --platform windows_runtime --dest mpi
+          Start-Process mpi/msmpisetup.exe -ArgumentList '-unattend' -Wait
       - name: Build the zip
         run: python packaging/package.py windows --version "$env:VERSION" --bin bin --out dist
       - name: Smoke test
@@ -198,11 +202,12 @@ jobs:
           python - <<'EOF'
           import json, sys
           sys.path.insert(0, 'tests/e2e')
-          from datasets import make_dataset, write_fasta
+          from dataset_gen import make_dataset, write_fasta
           names, _, unaligned = make_dataset()
           write_fasta('check/unaligned.fasta', names, unaligned)
           json.dump({'engine': 'phyml', 'datatype': 'nt', 'model': 'HKY85',
-                     'support_method': '-4', 'use_mpi': False}, open('check/config.json', 'w'))
+                     'support_method': 'bootstrap', 'bootstrap_replicates': '4',
+                     'use_mpi': False}, open('check/config.json', 'w'))
           EOF
           docker run --rm -v "$PWD/check:/check" -w /check ubuntu:22.04 sh -c '
             set -e
@@ -215,7 +220,7 @@ jobs:
           path: dist/phymlGUI-*-x86_64.AppImage
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [version, package-windows, package-linux]
     runs-on: ubuntu-22.04
     timeout-minutes: 15

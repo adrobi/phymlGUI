@@ -90,5 +90,13 @@
       "sha256": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
       "save_as": "runtime-x86_64"
     }
+  },
+  "windows_runtime": {
+    "msmpi": {
+      "version": "10.1.1 (the bundled phyml-mpi.exe links msmpi.dll even in serial mode)",
+      "url": "https://github.com/microsoft/Microsoft-MPI/releases/download/v10.1.1/msmpisetup.exe",
+      "sha256": "7308fd15e437d6829fd9c6ec5d801380faa3bff6e66e1dee3e8e005106fb6a68",
+      "save_as": "msmpisetup.exe"
+    }
   }
 }

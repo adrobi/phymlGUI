@@ -26,7 +26,8 @@ Start phymlgui.exe. Command line: phymlgui-cli.exe --file data.fasta
 (or --batch folder, --version).
 
 The analysis programs are in bin/; their licenses are in licenses/.
-MPI mode of PhyML needs Microsoft MPI (msmpisetup.exe from Microsoft).
+PhyML needs Microsoft MPI (msmpisetup.exe from Microsoft), also for serial runs:
+the bundled PhyML is an MPI build.
 Settings are kept next to phymlgui.exe, or in %APPDATA%\\phymlGUI if this
 folder is read-only.
 """

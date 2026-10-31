@@ -75,3 +75,39 @@ def test_detect_never_uses_app_dir_inside_an_appimage(tmp_path):
                         is_writable=lambda d: True, app_dir=str(tmp_path / 'squashfs-root' / 'usr' / 'bin'),
                         platform='posix')
     assert p.data_dir == str(tmp_path / '.config' / 'phymlGUI')
+
+
+def test_child_env_undoes_the_pyinstaller_library_path(monkeypatch):
+    """The frozen Linux bootloader puts _internal first on LD_LIBRARY_PATH; mpirun,
+    phyml-mpi and xdg-open must get the user's own value back (or none)."""
+    monkeypatch.setattr(utils, 'IS_WINDOWS', False)
+    frozen = {'LD_LIBRARY_PATH': '/tmp/_internal:/opt/lib', 'LD_LIBRARY_PATH_ORIG': '/opt/lib', 'X': '1'}
+    assert utils.child_env(frozen, frozen=True) == {'LD_LIBRARY_PATH': '/opt/lib', 'X': '1'}
+    assert utils.child_env({'LD_LIBRARY_PATH': '/tmp/_internal', 'X': '1'}, frozen=True) == {'X': '1'}
+    plain = {'LD_LIBRARY_PATH': '/opt/lib', 'X': '1'}
+    assert utils.child_env(plain, frozen=False) == plain
+    monkeypatch.setattr(utils, 'IS_WINDOWS', True)
+    assert utils.child_env(frozen, frozen=True) == frozen
+
+
+def test_runner_starts_programs_with_the_child_env(monkeypatch):
+    import subprocess
+    from phyml_core import runner
+    seen = {}
+
+    class Stop(Exception):
+        pass
+
+    def fake_popen(argv, **kwargs):
+        seen.update(kwargs)
+        raise Stop
+    monkeypatch.setattr(utils, 'child_env', lambda: {'MARK': 'child'})
+    monkeypatch.setattr(subprocess, 'Popen', fake_popen)
+    r = runner.PipelineRunner.__new__(runner.PipelineRunner)
+    import threading
+    r._lock, r._cancelled = threading.Lock(), threading.Event()
+    try:
+        r._execute(['x'], 'cancel', False)
+    except Stop:
+        pass
+    assert seen.get('env') == {'MARK': 'child'}
