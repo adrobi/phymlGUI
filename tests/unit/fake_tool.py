@@ -27,7 +27,8 @@ SLEEPER = 'import time; time.sleep(60)'
 
 
 def say(text):
-    sys.stdout.write(text + '\n')
+    # bytes, like real programs: a cp1252 pipe cannot encode a Cyrillic path
+    sys.stdout.buffer.write((text + '\n').encode('utf-8'))
     sys.stdout.flush()
 
 
