@@ -1,17 +1,27 @@
-"""phymlGUI entry point. Application code lives in phyml_core/ and phyml_ui/."""
+"""phymlGUI entry point. Application code lives in phyml_core/ and phyml_ui/.
+
+With arguments it runs the headless CLI and never imports PySide6; the GUI is imported
+only when started without arguments.
+"""
 import sys
 
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: F401  (re-exported for compatibility)
 
-from phyml_core import __version__  # noqa: F401
-from phyml_core.i18n import _t, LANG, STRINGS  # noqa: F401
-from phyml_core.pipeline import PipelineWorker  # noqa: F401
-from phyml_core.utils import psutil, detect_cores, is_mpi_binary, resource_path  # noqa: F401
-from phyml_ui.main_window import PhyMLApp, CONFIG_FILE  # noqa: F401
-from phyml_ui.tree_viewer import TreeViewerDialog  # noqa: F401
-
-if __name__ == '__main__':
+def main():
+    if len(sys.argv) > 1:
+        from phyml_core.cli import main as cli_main
+        sys.exit(cli_main())
+    from PySide6.QtWidgets import QApplication
+    from phyml_ui.main_window import PhyMLApp
+    from PySide6.QtWidgets import QMessageBox
     app = QApplication(sys.argv)
-    window = PhyMLApp()
+    try:
+        window = PhyMLApp()
+    except OSError as e:   # e.g. the data folder cannot be created
+        QMessageBox.critical(None, 'phymlGUI', str(e))
+        sys.exit(1)
     window.show()
     sys.exit(app.exec())
+
+
+if __name__ == '__main__':
+    main()

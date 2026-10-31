@@ -1,0 +1,470 @@
+Binary files pristine/bin/raxml-ng.exe and dl_src/bin/raxml-ng.exe differ
+diff -ruN '--exclude=src.zip' pristine/libs/coraxlib/src/corax/core/common.h dl_src/libs/coraxlib/src/corax/core/common.h
+--- pristine/libs/coraxlib/src/corax/core/common.h	2025-10-31 18:41:19.000000000 +0300
++++ dl_src/libs/coraxlib/src/corax/core/common.h	2026-10-24 19:21:29.744785700 +0300
+@@ -44,7 +44,7 @@
+ #include <sys/sysinfo.h>
+ #endif
+ 
+-#if (defined(__WIN32__) || defined(__WIN64__))
++#if (defined(__WIN32__) || defined(__WIN64__)) && defined(CORAX_SHARED)
+ #define CORAX_EXPORT __declspec(dllexport)
+ #else
+ #define CORAX_EXPORT
+diff -ruN '--exclude=src.zip' pristine/libs/coraxlib/src/corax/core/partition.c dl_src/libs/coraxlib/src/corax/core/partition.c
+--- pristine/libs/coraxlib/src/corax/core/partition.c	2025-10-31 18:41:19.000000000 +0300
++++ dl_src/libs/coraxlib/src/corax/core/partition.c	2026-10-24 22:38:25.828525000 +0300
+@@ -45,7 +45,7 @@
+ 
+   if (partition->tipchars)
+     for (i = 0; i < partition->tips; ++i)
+-      corax_aligned_free(partition->tipchars[i]);
++      free(partition->tipchars[i]);
+   free(partition->tipchars);
+ 
+   if (partition->ttlookup) corax_aligned_free(partition->ttlookup);
+@@ -114,7 +114,7 @@
+     free(repeats->lookup_buffer);
+     free(repeats->toclean_buffer);
+     free(repeats->id_site_buffer);
+-    free(repeats->bclv_buffer);
++    corax_aligned_free(repeats->bclv_buffer);
+     free(repeats->charmap);
+     free(repeats);
+   }
+@@ -236,7 +236,7 @@
+         && CORAX_HAS_CPU_FEATURE(avx_present))
+       return CORAX_SUCCESS;
+ 
+-    free(partition->ttlookup);
++    corax_aligned_free(partition->ttlookup);
+     partition->ttlookup =
+         corax_aligned_alloc(alloc_size * sizeof(double), partition->alignment);
+     if (!partition->ttlookup)
+diff -ruN '--exclude=src.zip' pristine/libs/coraxlib/src/corax/core/repeats.c dl_src/libs/coraxlib/src/corax/core/repeats.c
+--- pristine/libs/coraxlib/src/corax/core/repeats.c	2025-10-31 18:41:19.000000000 +0300
++++ dl_src/libs/coraxlib/src/corax/core/repeats.c	2026-10-24 22:37:42.855902200 +0300
+@@ -221,7 +221,7 @@
+   }
+   unsigned int sizealloc = (ids + additional_sites) * partition->states_padded
+                            * partition->rate_cats * sizeof(double);
+-  free(partition->clv[tip_index]);
++  corax_aligned_free(partition->clv[tip_index]);
+ 
+   partition->clv[tip_index] =
+       corax_aligned_alloc(sizealloc, partition->alignment);
+diff -ruN '--exclude=src.zip' pristine/libs/coraxlib/src/corax/io/binary.c dl_src/libs/coraxlib/src/corax/io/binary.c
+--- pristine/libs/coraxlib/src/corax/io/binary.c	2026-03-11 21:17:41.000000000 +0300
++++ dl_src/libs/coraxlib/src/corax/io/binary.c	2026-10-24 22:37:47.461549500 +0300
+@@ -1029,7 +1029,10 @@
+   if (!bin_fread(data, *size, 1, bin_file))
+   {
+     corax_set_error(CORAX_BIN_ERROR_BINARY_IO, "Error reading data.");
+-    free(data);
++    if (*attributes & CORAX_BIN_ATTRIB_ALIGNED)
++      corax_aligned_free(data);
++    else
++      free(data);
+     return CORAX_FAILURE;
+   }
+ 
+diff -ruN '--exclude=src.zip' pristine/libs/coraxlib/src/corax/tree/treeinfo.c dl_src/libs/coraxlib/src/corax/tree/treeinfo.c
+--- pristine/libs/coraxlib/src/corax/tree/treeinfo.c	2026-04-25 00:35:45.000000000 +0300
++++ dl_src/libs/coraxlib/src/corax/tree/treeinfo.c	2026-10-24 22:37:44.852293600 +0300
+@@ -791,7 +791,7 @@
+ 
+   if (treeinfo->deriv_precomp[partition_index])
+   {
+-    free(treeinfo->deriv_precomp[partition_index]);
++    corax_aligned_free(treeinfo->deriv_precomp[partition_index]);
+     treeinfo->deriv_precomp[partition_index] = NULL;
+   }
+ 
+diff -ruN '--exclude=src.zip' pristine/libs/coraxlib/src/corax/util/stepwise.c dl_src/libs/coraxlib/src/corax/util/stepwise.c
+--- pristine/libs/coraxlib/src/corax/util/stepwise.c	2026-03-11 21:17:41.000000000 +0300
++++ dl_src/libs/coraxlib/src/corax/util/stepwise.c	2026-10-24 22:35:47.977481800 +0300
+@@ -85,7 +85,9 @@
+     {
+       int rint;
+       corax_random_r(buf, &rint);
+-      double r = ((double)rint / RAND_MAX);
++      /* corax_random_r yields [0, 2^31-1] everywhere, while RAND_MAX is
++         only 32767 on Windows: normalize by the generator's own maximum */
++      double r = ((double)rint / 2147483647.0);
+       j        = (unsigned int)(r * (i + 1));
+ 
+       CORAX_SWAP(x[i], x[j]);
+diff -ruN '--exclude=src.zip' pristine/src/adaptive/DifficultyPredictor.cpp dl_src/src/adaptive/DifficultyPredictor.cpp
+--- pristine/src/adaptive/DifficultyPredictor.cpp	2026-09-03 19:23:46.000000000 +0300
++++ dl_src/src/adaptive/DifficultyPredictor.cpp	2026-10-24 22:46:13.171567100 +0300
+@@ -76,7 +76,7 @@
+   // init seeds
+   uintVector seeds(n_trees);
+   for (unsigned int i = 0; i < n_trees; ++i)
+-    seeds[i] = (unsigned int) rand();
++    seeds[i] = (unsigned int) raxml_rand();
+ 
+   for (unsigned int i = 0; i < n_trees; ++i)
+     _pars_tree_list.emplace_back(Tree::buildParsimony(*_parsimony_msa_ptr, seeds[i], false, &score));
+diff -ruN '--exclude=src.zip' pristine/src/adaptive/StoppingCriterion.cpp dl_src/src/adaptive/StoppingCriterion.cpp
+--- pristine/src/adaptive/StoppingCriterion.cpp	2026-09-03 19:23:46.000000000 +0300
++++ dl_src/src/adaptive/StoppingCriterion.cpp	2026-10-24 22:46:13.163049200 +0300
+@@ -391,14 +391,14 @@
+ 
+         {
+             ParallelContext::UniqueLock lock;
+-            srand(seed);
++            raxml_srand(seed);
+             
+             for(exp = 0; exp < rell_size; exp++){
+             
+                 double rell_loglh = 0;
+                 for (i = 0; i<total_sites; i++){
+                     
+-                    site_index = (unsigned int) rand() % total_sites;
++                    site_index = (unsigned int) raxml_rand() % total_sites;
+                     std::pair<int, int> p = find_by_site_index(site_index);
+                     assert(p.first >= 0 && p.second >= 0);
+                     auto p_id = (unsigned int) p.first;
+@@ -410,8 +410,8 @@
+             }
+ 
+             for(exp = 0; exp < rell_size; exp++){
+-                auto ind1 = (unsigned int) rand() % rell_size;
+-                auto ind2 = (unsigned int) rand() % rell_size;
++                auto ind1 = (unsigned int) raxml_rand() % rell_size;
++                auto ind2 = (unsigned int) raxml_rand() % rell_size;
+                 logl_diff_dist[exp] = fabs(rell_dist[ind1] - rell_dist[ind2]);
+             }
+         }
+diff -ruN '--exclude=src.zip' pristine/src/common.h dl_src/src/common.h
+--- pristine/src/common.h	2026-05-27 16:34:30.000000000 +0300
++++ dl_src/src/common.h	2026-10-24 22:46:05.179337100 +0300
+@@ -15,6 +15,12 @@
+ #include "log.hpp"
+ #include "util/SystemTimer.hpp"
+ 
++/* rand()/srand() with glibc semantics on every platform: Windows' rand() is a
++   15-bit LCG, so per-tree and per-replicate seeds drawn from it collide
++   (duplicate bootstrap replicates) and differ from Linux for the same --seed */
++int raxml_rand();
++void raxml_srand(unsigned int seed);
++
+ /* used to suppress compiler warnings about unused args */
+ #define RAXML_UNUSED(expr) (void)(expr)
+ 
+@@ -26,8 +32,8 @@
+ 
+ double sysutil_gettime();
+ void sysutil_show_rusage();
+-unsigned long sysutil_get_memused();
+-unsigned long sysutil_get_memtotal(bool ignore_errors = true);
++unsigned long long sysutil_get_memused();
++unsigned long long sysutil_get_memtotal(bool ignore_errors = true);
+ 
+ std::string sysutil_get_cpu_model();
+ unsigned int sysutil_get_cpu_cores();
+diff -ruN '--exclude=src.zip' pristine/src/main.cpp dl_src/src/main.cpp
+--- pristine/src/main.cpp	2026-09-03 19:23:46.000000000 +0300
++++ dl_src/src/main.cpp	2026-10-24 22:46:13.153672200 +0300
+@@ -1314,7 +1314,7 @@
+     // temp workaround: since MSA pattern compression calls rand(), it will change all random
+     // numbers generated afterwards. so just reset seed to the initial value to ensure that
+     // starting trees, BS replicates etc. are the same regardless whether pat.comp is ON or OFF
+-    srand(opts.random_seed);
++    raxml_srand(opts.random_seed);
+   }
+ 
+ //  if (parted_msa.part_count() > 1)
+@@ -1851,7 +1851,7 @@
+   // init seeds
+   uintVector seeds(tree_count);
+   for (size_t i = 0; i < tree_count; ++i)
+-    seeds[i] = (unsigned int) rand();
++    seeds[i] = (unsigned int) raxml_rand();
+ 
+   auto thread_fn = std::bind(thread_start_trees,
+                              std::ref(instance),
+@@ -1946,7 +1946,7 @@
+       // init seeds
+       uintVector seeds(st_tree_count);
+       for (size_t i = 0; i < st_tree_count; ++i)
+-        seeds[i] = (unsigned int) rand();
++        seeds[i] = (unsigned int) raxml_rand();
+ 
+       for (size_t i = 0; i < st_tree_count; ++i)
+       {
+@@ -2178,7 +2178,7 @@
+     auto& seeds = instance.bs_seeds;
+     seeds.resize(num_bsreps);
+     for (size_t i = 0; i < seeds.size(); ++i)
+-      seeds[i] = (unsigned int) rand();
++      seeds[i] = (unsigned int) raxml_rand();
+ 
+     /* generate missing parsimony trees from the original MSA */
+     if (instance.opts.num_pars_trees() > instance.pars_trees.size())
+@@ -2191,7 +2191,7 @@
+       {
+         for (size_t i = 0; i < trees_to_generate; ++i)
+         {
+-          auto tree = generate_tree(instance, StartingTree::parsimony, (unsigned int) rand());
++          auto tree = generate_tree(instance, StartingTree::parsimony, (unsigned int) raxml_rand());
+           instance.pars_trees.emplace_back(std::move(tree));
+         }
+       }
+@@ -2378,7 +2378,7 @@
+     /* no starting trees -> use a first tree from pars_trees, generate if needed */
+     if (instance.pars_trees.empty())
+     {
+-      auto tree = generate_tree(instance, StartingTree::parsimony, (unsigned int)  rand());
++      auto tree = generate_tree(instance, StartingTree::parsimony, (unsigned int)  raxml_rand());
+       instance.pars_trees.emplace_back(std::move(tree));
+     }
+   }
+@@ -2740,7 +2740,7 @@
+ 
+     if (bs_num % opts.bootstop_interval == 0 || bs_num == bs_trees.size())
+     {
+-      converged = bootstop_checker->converged((unsigned int) rand());
++      converged = bootstop_checker->converged((unsigned int) raxml_rand());
+ 
+       if (print)
+       {
+@@ -3474,7 +3474,7 @@
+ 
+   // we need at least 2 doubles for each partition AND threads to perform parallel reduction,
+   // and even more with FreeRates in EM mode ->  so resize the buffer accordingly
+-  auto doubles_per_thread_part = std::max(2UL, total_freerate_category_count);
++  auto doubles_per_thread_part = std::max<size_t>(2, total_freerate_category_count);
+   const size_t reduce_buffer_size = std::max<size_t>(1024u, doubles_per_thread_part * sizeof(double) *
+                                      parted_msa.part_count() * ParallelContext::num_threads());
+ 
+@@ -4012,8 +4012,8 @@
+   check_options(instance);
+ 
+   /* init template tree */
+-  srand(instance.opts.random_seed);
+-  instance.random_tree = generate_tree(instance, StartingTree::random, (unsigned int) rand());
++  raxml_srand(instance.opts.random_seed);
++  instance.random_tree = generate_tree(instance, StartingTree::random, (unsigned int) raxml_rand());
+ 
+   // read start trees from file to avoid re-generation
+   // NOTE: doesn't work for OLD constrained tree search
+@@ -4050,7 +4050,7 @@
+ 
+   // TEMP WORKAROUND: here we reset random seed once again to make sure that BS replicates
+   // are not affected by the number of ML search starting trees that has been generated before
+-  srand(instance.opts.random_seed);
++  raxml_srand(instance.opts.random_seed);
+ 
+   /* generate bootstrap replicates */
+   generate_bootstraps(instance, cm.checkp_file());
+@@ -4246,7 +4246,7 @@
+     {
+       // make sure all MPI ranks use the same random seed
+       ParallelContext::mpi_broadcast(&opts.random_seed, sizeof(unsigned int));
+-      srand(opts.random_seed);
++      raxml_srand(opts.random_seed);
+ 
+       logger().log_level(instance.opts.log_level);
+       logger().precision(instance.opts.precision);
+diff -ruN '--exclude=src.zip' pristine/src/util/sysutil.cpp dl_src/src/util/sysutil.cpp
+--- pristine/src/util/sysutil.cpp	2026-09-03 19:23:46.000000000 +0300
++++ dl_src/src/util/sysutil.cpp	2026-10-24 22:46:07.639509900 +0300
+@@ -1,8 +1,10 @@
+-#if (!defined(_WIN32) && !defined(__aarch64__)) 
++#if ((!defined(_WIN32) || defined(__GNUC__)) && !defined(__aarch64__))
+ #include <cpuid.h>
+ #endif
+ #include <sys/time.h>
++#ifndef _WIN32
+ #include <sys/resource.h>
++#endif
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ #if defined __APPLE__
+@@ -20,6 +22,55 @@
+ 
+ #include "../common.h"
+ 
++#ifdef _WIN32
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <windows.h>
++#include <psapi.h>
++
++static double filetime_to_sec(const FILETIME& ft)
++{
++  return (double)(((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime) * 1.0e-7;
++}
++
++#include <mutex>
++
++static std::mutex rand_mutex;
++static struct corax_random_data rand_data;
++static char rand_state[128];   /* 128 bytes = glibc's default TYPE_3 state */
++static bool rand_seeded = false;
++
++static void rand_seed_locked(unsigned int seed)
++{
++  memset(&rand_data, 0, sizeof(rand_data));
++  corax_initstate_r(seed, rand_state, sizeof(rand_state), &rand_data);
++  rand_seeded = true;
++}
++
++void raxml_srand(unsigned int seed)
++{
++  std::lock_guard<std::mutex> lock(rand_mutex);
++  rand_seed_locked(seed);
++}
++
++int raxml_rand()
++{
++  std::lock_guard<std::mutex> lock(rand_mutex);
++  if (!rand_seeded)
++    rand_seed_locked(1);   /* as in glibc: rand() before srand() == srand(1) */
++  int32_t r;
++  corax_random_r(&rand_data, &r);
++  return r;
++}
++#else
++int raxml_rand() { return rand(); }
++void raxml_srand(unsigned int seed) { srand(seed); }
++#endif
++
+ using namespace std;
+ 
+ SystemTimer systimer;
+@@ -55,8 +106,13 @@
+ 
+ void * xmemalign(size_t size, size_t alignment)
+ {
++#ifdef _WIN32
++  void * t = _aligned_malloc(size, alignment);
++  int err = 0;
++#else
+   void * t = nullptr;
+   int err = posix_memalign(& t, alignment, size);
++#endif
+ 
+   if (err || !t)
+     sysutil_fatal("Unable to allocate enough memory.");
+@@ -85,11 +141,18 @@
+ 
+ void sysutil_show_rusage()
+ {
++#ifdef _WIN32
++  FILETIME creation, exit_time, kernel, user;
++  GetProcessTimes(GetCurrentProcess(), &creation, &exit_time, &kernel, &user);
++  fprintf(stderr, "Time: %.3fs (user)", filetime_to_sec(user));
++  fprintf(stderr, " %.3fs (sys)", filetime_to_sec(kernel));
++  fprintf(stderr, " Memory: %.0fMB\n", sysutil_get_memused() * 1.0e-6);
++#else
+   struct rusage r_usage;
+   getrusage(RUSAGE_SELF, & r_usage);
+-  
++
+   fprintf(stderr,
+-          "Time: %.3fs (user)", 
++          "Time: %.3fs (user)",
+           r_usage.ru_utime.tv_sec * 1.0 + (double)r_usage.ru_utime.tv_usec * 1.0e-6);
+   fprintf(stderr,
+           " %.3fs (sys)",
+@@ -102,10 +165,17 @@
+   /* Linux: ru_maxrss gives the size in kilobytes  */
+   fprintf(stderr, " Memory: %.0fMB\n", r_usage.ru_maxrss * 1.0e-3);
+ #endif
++#endif
+ }
+ 
+-unsigned long sysutil_get_memused()
++unsigned long long sysutil_get_memused()
+ {
++#ifdef _WIN32
++  PROCESS_MEMORY_COUNTERS pmc;
++  if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
++    return (unsigned long long) pmc.PeakWorkingSetSize;
++  return 0;
++#else
+   struct rusage r_usage;
+   getrusage(RUSAGE_SELF, & r_usage);
+ 
+@@ -116,11 +186,25 @@
+   /* Linux: ru_maxrss gives the size in kilobytes  */
+   return (unsigned long)r_usage.ru_maxrss * 1024;
+ #endif
++#endif
+ }
+ 
+-unsigned long sysutil_get_memtotal(bool ignore_errors)
++unsigned long long sysutil_get_memtotal(bool ignore_errors)
+ {
+-#if defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
++#if defined(_WIN32)
++
++  MEMORYSTATUSEX status;
++  status.dwLength = sizeof(status);
++  if (!GlobalMemoryStatusEx(&status))
++  {
++    if (ignore_errors)
++      return 0;
++    else
++      throw runtime_error("Cannot determine amount of RAM");
++  }
++  return status.ullTotalPhys;
++
++#elif defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
+ 
+   long phys_pages = sysconf(_SC_PHYS_PAGES);
+   long pagesize = sysconf(_SC_PAGESIZE);
+@@ -178,7 +262,7 @@
+ // not supported
+   RAXML_UNUSED(out);
+   RAXML_UNUSED(x);
+-#elif defined(_WIN32)
++#elif defined(_WIN32) && !defined(__GNUC__)
+   __cpuid(out, x);
+ #else
+   __cpuid_count(x, 0, out[0], out[1], out[2], out[3]);
+@@ -295,7 +379,11 @@
+ 
+ long sysutil_online_cpu_cores()
+ {
++#ifdef _WIN32
++  return (long) std::thread::hardware_concurrency();
++#else
+   return sysconf(_SC_NPROCESSORS_ONLN);
++#endif
+ }
+ 
+ unsigned long sysutil_get_cpu_features()
+@@ -314,7 +402,7 @@
+   int32_t nIds = info[0];
+ 
+   get_cpuid(info, 0x80000000);
+-  u_int32_t nExIds = info[0];
++  uint32_t nExIds = info[0];
+ 
+   //  Detect Features
+   if (nIds >= 0x00000001)
+@@ -463,7 +551,16 @@
+ 
+ std::string sysutil_realpath(const std::string& path)
+ {
++#ifdef _WIN32
++  // _fullpath does not check existence: mimic realpath's ENOENT
++  char * real_path = nullptr;
++  if (sysutil_file_exists(path) || sysutil_dir_exists(path))
++    real_path = _fullpath(nullptr, path.c_str(), 0);
++  else
++    errno = ENOENT;
++#else
+   char * real_path = realpath(path.c_str(), nullptr);
++#endif
+   if (real_path)
+   {
+     const string result(real_path);

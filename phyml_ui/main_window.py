@@ -1,198 +1,61 @@
-import csv
-import json
 import os
 import shutil
-from html import escape
+from dataclasses import asdict
+from datetime import datetime
 
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                             QFormLayout, QComboBox, QLineEdit, QPushButton,
-                             QFileDialog, QMessageBox, QTabWidget,
-                             QCheckBox, QGroupBox, QSizePolicy, QLabel,
-                             QStatusBar, QProgressBar, QSplitter, QToolBox,
-                             QListWidget, QListWidgetItem, QTextEdit,
-                             QTableWidget, QTableWidgetItem, QHeaderView,
-                             QScrollArea, QDialog, QDialogButtonBox)
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QIcon, QFont, QShortcut, QKeySequence
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
+                             QPushButton, QMessageBox, QCheckBox, QSplitter, QScrollArea,
+                             QInputDialog, QApplication)
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 
-from phyml_core import __version__
+from phyml_core import __version__, presets, report, settings
+from phyml_core.engines import ENGINES
+from phyml_core.engines.base import format_issue
+from phyml_core.history import HistoryStore, best_tree, new_record
 from phyml_core.i18n import _t
-from phyml_core.utils import psutil, detect_cores, is_mpi_binary, resource_path
-from phyml_core.pipeline import PipelineWorker
+from phyml_core.paths import AppPaths
+from phyml_core.utils import detect_cores, is_mpi_binary, resource_path
+from phyml_ui.fasta_input import FASTA_SUFFIXES, FastaInput, batch_files
+from phyml_ui.nav_panel import NavPanel
+from phyml_ui.params_panel import ParamsPanel, set_combo_by_data
+from phyml_ui.results_panel import ResultsPanel
+from phyml_ui.settings_dialog import SettingsDialog
+from phyml_ui.status_bar import AppStatusBar
+from phyml_ui.themes import resolve, build_qss, role_colors, PALETTES
 from phyml_ui.tree_viewer import TreeViewerWidget
-from phyml_ui.themes import resolve, build_qss, role_colors, ACCENTS
+from phyml_ui.worker import RunWorker
 
-CONFIG_FILE = 'phyml_config.json'
-
-
-class LogConsole(QWidget):
-    """Structured log: colored roles, severity filter, substring search.
-
-    Keeps the QTextEdit-style API used by the pipeline (append/clear) and
-    by tests (toPlainText); entries are always stored in full, filtering
-    only affects what is displayed.
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._entries = []  # (role, text)
-        self._role_colors = {'error': '#E53935', 'success': '#43A047',
-                             'system': '#1E9E6A', 'out': '#212121'}
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
-
-        bar = QHBoxLayout()
-        self.filter_box = QComboBox()
-        self.filter_box.addItem(_t("log_filter_all"), "all")
-        self.filter_box.addItem(_t("log_filter_error"), "error")
-        self.filter_box.addItem(_t("log_filter_success"), "success")
-        self.filter_box.addItem(_t("log_filter_system"), "system")
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText(_t("log_search"))
-        self.filter_box.currentIndexChanged.connect(self._render)
-        self.search_edit.textChanged.connect(self._render)
-        bar.addWidget(self.filter_box)
-        bar.addWidget(self.search_edit)
-        layout.addLayout(bar)
-
-        self.view = QTextEdit()
-        self.view.setReadOnly(True)
-        self.view.setFont(QFont('Consolas', 9))
-        layout.addWidget(self.view)
-
-    @staticmethod
-    def _classify(text):
-        s = text.strip()
-        if ('[ERROR]' in s or '[ОШИБКА]' in s or '[CRITICAL' in s
-                or '[КРИТИЧ' in s or s.startswith('[!')):
-            return 'error'
-        if s.startswith('[+]') or 'SUCCESSFULLY' in s or 'УСПЕШНО' in s:
-            return 'success'
-        if s.startswith('['):
-            return 'system'
-        return 'out'
-
-    def append(self, text):
-        self._entries.append((self._classify(text), text))
-        if self._passes(*self._entries[-1]):
-            self._append_html(text, self._entries[-1][0])
-
-    def clear(self):
-        self._entries.clear()
-        self.view.clear()
-
-    def toPlainText(self):
-        return '\n'.join(t for _, t in self._entries)
-
-    def _passes(self, role, text):
-        flt = self.filter_box.currentData()
-        if flt != 'all' and role != flt:
-            return False
-        needle = self.search_edit.text().strip().lower()
-        return not needle or needle in text.lower()
-
-    def set_role_colors(self, colors):
-        self._role_colors = dict(colors)
-        self._render()
-
-    def _append_html(self, text, role):
-        prefix = self._role_colors[role]
-        weight = '600' if role == 'system' else '400'
-        self.view.append(f'<span style="color:{prefix};font-weight:{weight}">'
-                         f'{escape(text)}</span>')
-        sb = self.view.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
-    def _render(self):
-        self.view.clear()
-        for role, text in self._entries:
-            if self._passes(role, text):
-                self._append_html(text, role)
+# settings that say nothing about how a run was made: left out of a history record
+_NOT_RUN_PARAMS = ('presets', 'recent', 'window')
 
 
-class SettingsDialog(QDialog):
-    """Rarely changed settings: executable paths and appearance."""
-
-    FIELDS = ('path_phyml', 'path_mpirun', 'path_muscle')
-
-    def __init__(self, app_window, parent=None):
-        super().__init__(parent)
-        self.app_window = app_window
-        self.setWindowTitle(_t("settings_title"))
-        self.setWindowIcon(QIcon(resource_path('icon.png')))
-        self.resize(640, 340)
-        root = QVBoxLayout(self)
-        paths_box = QGroupBox(_t("settings_paths"))
-        form = QFormLayout(paths_box)
-        self.edits = []
-        inputs = [app_window.phyml_path_input, app_window.mpirun_path_input,
-                  app_window.muscle_path_input]
-        for key, source in zip(self.FIELDS, inputs):
-            edit = QLineEdit(source.text())
-            btn = QPushButton(_t("btn_browse"))
-            btn.clicked.connect(lambda _=False, e=edit: self._browse(e))
-            row = QHBoxLayout(); row.addWidget(edit); row.addWidget(btn)
-            wrap = QWidget(); wrap.setLayout(row)
-            form.addRow(_t(key), wrap)
-            self.edits.append(edit)
-        root.addWidget(paths_box)
-
-        look_box = QGroupBox(_t("settings_appearance"))
-        look = QFormLayout(look_box)
-        self.theme_combo = QComboBox()
-        self.theme_combo.addItem(_t("theme_system"), "system")
-        self.theme_combo.addItem(_t("theme_light"), "light")
-        self.theme_combo.addItem(_t("theme_dark"), "dark")
-        idx = self.theme_combo.findData(app_window._theme_setting)
-        self.theme_combo.setCurrentIndex(max(idx, 0))
-        self.accent_combo = QComboBox()
-        self.accent_combo.addItem(_t("accent_system"), "system")
-        for key, hexval in ACCENTS.items():
-            self.accent_combo.addItem(_t("accent_" + key), key)
-        idx = self.accent_combo.findData(app_window._accent_setting)
-        self.accent_combo.setCurrentIndex(max(idx, 0))
-        look.addRow(_t("settings_theme"), self.theme_combo)
-        look.addRow(_t("settings_accent"), self.accent_combo)
-        root.addWidget(look_box)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
-
-    def _browse(self, edit):
-        path, _ = QFileDialog.getOpenFileName(self, _t("file_exe"))
-        if path:
-            edit.setText(path)
-
-    def accept(self):
-        inputs = [self.app_window.phyml_path_input,
-                  self.app_window.mpirun_path_input,
-                  self.app_window.muscle_path_input]
-        for edit, source in zip(self.edits, inputs):
-            source.setText(edit.text())  # programmatic: triggers autosave & MPI detect
-        self.app_window.apply_theme(self.theme_combo.currentData(),
-                                    self.accent_combo.currentData())
-        if not self.app_window._is_loading:
-            self.app_window.auto_save()
-        super().accept()
-
-
-# --- Main Application Window ---
 class PhyMLApp(QWidget):
-    def __init__(self):
+    """The main window: builds the panels, keeps the settings file and the history in step
+    with them and starts / cancels / shows runs."""
+
+    def __init__(self, paths=None, engines=None):
         super().__init__()
+        self.paths = paths if paths is not None else AppPaths.detect()
+        self.engines = ENGINES if engines is None else engines   # tests pass fakes
+        self.history_store = HistoryStore(self.paths.history_file)
+        self.settings_store = settings.SettingsStore(self.paths, self._log)
         self._is_loading = True
+        self._history_records = []      # the records shown in the history list, same order
         self.worker = None
         self.fasta_file = ""
         self._mpi_auto_path = ""
-        self._cpu_samples = []
-        self._mon_procs = {}
-        self._batch_mode = False
-        self._theme_setting = 'system'
-        self._accent_setting = 'green'
+        self._theme_setting, self._accent_setting = 'system', 'green'
+        self.engine_setting = 'phyml'
         self._recent = []
+        self._user_presets = {}
+        self._failed_files = []
+        self._run_started = None
+        self._run_config = None         # the config the current/last run was started with
+        self._run_inputs = []           # what that run was asked to process (history 'inputs')
+        self._run_out_dir = None        # where its summary goes
+        self._last_out_dir = None
+        self.last_result = None         # RunResult of the last finished run
         self.phys_cores, self.logi_cores = detect_cores()
         self.initUI()
         self.load_config()
@@ -211,7 +74,10 @@ class PhyMLApp(QWidget):
         root_layout.setContentsMargins(6, 6, 6, 6)
         self.splitter = QSplitter(Qt.Horizontal)
         root_layout.addWidget(self.splitter, 1)
-        root_layout.addWidget(self._build_status_bar())
+        self.status = AppStatusBar(self.phys_cores, self.logi_cores)
+        self.status.open_dir_clicked.connect(self._open_output_dir)
+        self.status.settings_clicked.connect(self.open_settings)
+        root_layout.addWidget(self.status)
 
         self.splitter.addWidget(self._build_middle_pane())
         self.splitter.addWidget(self._build_right_pane())
@@ -220,123 +86,45 @@ class PhyMLApp(QWidget):
 
         self.bind_autosave(self)  # after the whole tree is parented
 
-    def _build_nav_panel(self):
-        self.panel = QToolBox()
-
-        self.recent_list = QListWidget()
-        self.recent_list.itemDoubleClicked.connect(self._open_recent)
-        self.panel.addItem(self.recent_list, _t("panel_recent"))
-
-        self.presets_list = QListWidget()
-        hint = QListWidgetItem(_t("panel_hint_presets"))
-        hint.setFlags(hint.flags() & ~Qt.ItemIsEnabled)
-        self.presets_list.addItem(hint)
-        self.panel.addItem(self.presets_list, _t("panel_presets"))
-
-        self.history_list = QListWidget()
-        hint = QListWidgetItem(_t("panel_hint_history"))
-        hint.setFlags(hint.flags() & ~Qt.ItemIsEnabled)
-        self.history_list.addItem(hint)
-        self.panel.addItem(self.history_list, _t("panel_history"))
-        return self.panel
-
     def _build_middle_pane(self):
-        """FASTA input + parameter groups (each on its own plate) + controls."""
+        """FASTA input + parameter groups (each on its own plate) + navigation + controls."""
         # hidden holders for engine paths; edited via the Settings dialog
         self.phyml_path_input = QLineEdit()
         self.phyml_path_input.textChanged.connect(self.on_phyml_path_changed)
         self.mpirun_path_input = QLineEdit()
         self.muscle_path_input = QLineEdit()
+        self.iqtree_path_input = QLineEdit()
 
         middle = QWidget()
         v = QVBoxLayout(middle)
-        v.setContentsMargins(0, 0, 0, 0)
+        v.setContentsMargins(0, 0, 8, 0)  # breathing room from the right splitter
         v.setSpacing(8)
-
-        v.addWidget(QLabel(_t("input_fasta")))
-        self.fasta_path_input = QLineEdit()
-        btn_fasta = QPushButton(_t("btn_select_fasta"))
-        btn_fasta.clicked.connect(self.browse_fasta)
-        btn_fasta_dir = QPushButton(_t("btn_select_dir"))
-        btn_fasta_dir.clicked.connect(self.browse_fasta_dir)
-        row = QHBoxLayout(); row.addWidget(self.fasta_path_input, 1)
-        row.addWidget(btn_fasta); row.addWidget(btn_fasta_dir)
-        v.addLayout(row)
+        self.fasta = FastaInput()
+        self.fasta.path_chosen.connect(self._set_input)
+        self.fasta_path_input = self.fasta.path_edit
+        v.addWidget(self.fasta)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        plates = QWidget()
-        pv = QVBoxLayout(plates)
-        pv.setContentsMargins(0, 0, 4, 0)
-        pv.setSpacing(10)
-
-        gb_model = QGroupBox(_t("tab_model"))
-        form_basic = QFormLayout(gb_model)
-        self.chk_use_mpi = QCheckBox(_t("lbl_use_mpi"))
-        self.le_mpi_np = QLineEdit(str(self.phys_cores))
-        self.le_mpi_np.setFixedWidth(50)
-        mpi_hbox = QHBoxLayout(); mpi_hbox.addWidget(self.chk_use_mpi)
-        mpi_hbox.addWidget(QLabel(_t("lbl_mpi_np"))); mpi_hbox.addWidget(self.le_mpi_np)
-        mpi_hbox.addStretch()
-        form_basic.addRow(_t("mode_mpi"), mpi_hbox)
-
-        self.cb_datatype = QComboBox()
-        self.cb_datatype.addItem(_t("dt_nt"), "nt")
-        self.cb_datatype.addItem(_t("dt_aa"), "aa")
-        self.cb_datatype.currentIndexChanged.connect(self.update_models)
-        form_basic.addRow(_t("lbl_dt"), self.cb_datatype)
-
-        self.cb_model = QComboBox()
-        form_basic.addRow(_t("lbl_model"), self.cb_model)
-
-        self.cb_support_method = QComboBox()
-        self.cb_support_method.addItem(_t("supp_boot"), "bootstrap")
-        self.cb_support_method.addItem(_t("supp_alrt1"), "-1"); self.cb_support_method.addItem(_t("supp_alrt2"), "-2")
-        self.cb_support_method.addItem(_t("supp_alrt4"), "-4"); self.cb_support_method.addItem(_t("supp_none"), "0")
-        self.cb_support_method.currentIndexChanged.connect(self.toggle_bootstrap_input)
-        form_basic.addRow(_t("lbl_supp"), self.cb_support_method)
-
-        self.le_bootstrap_replicates = QLineEdit("100")
-        form_basic.addRow(_t("lbl_boot"), self.le_bootstrap_replicates)
-        pv.addWidget(gb_model)
-
-        gb_evo = QGroupBox(_t("tab_evo"))
-        form_model = QFormLayout(gb_evo)
-        self.cb_freq = QComboBox()
-        self.cb_freq.addItem(_t("freq_def"), "default"); self.cb_freq.addItem(_t("freq_emp"), "e"); self.cb_freq.addItem(_t("freq_ml"), "m")
-        form_model.addRow(_t("lbl_freq"), self.cb_freq)
-        self.le_tstv = QLineEdit("e"); form_model.addRow(_t("lbl_tstv"), self.le_tstv)
-        self.le_pinv = QLineEdit("0.0"); form_model.addRow(_t("lbl_pinv"), self.le_pinv)
-        self.le_classes = QLineEdit("4"); form_model.addRow(_t("lbl_classes"), self.le_classes)
-        self.le_gamma = QLineEdit("e"); form_model.addRow(_t("lbl_gamma"), self.le_gamma)
-        pv.addWidget(gb_evo)
-
-        gb_search = QGroupBox(_t("tab_search"))
-        form_tree = QFormLayout(gb_search)
-        self.cb_search = QComboBox()
-        self.cb_search.addItem(_t("search_nni"), "NNI"); self.cb_search.addItem(_t("search_spr"), "SPR"); self.cb_search.addItem(_t("search_best"), "BEST")
-        form_tree.addRow(_t("lbl_search"), self.cb_search)
-        self.cb_optimize = QComboBox()
-        self.cb_optimize.addItem(_t("opt_tlr"), "tlr"); self.cb_optimize.addItem(_t("opt_tl"), "tl"); self.cb_optimize.addItem(_t("opt_lr"), "lr")
-        self.cb_optimize.addItem(_t("opt_l"), "l"); self.cb_optimize.addItem(_t("opt_r"), "r"); self.cb_optimize.addItem(_t("opt_n"), "n")
-        form_tree.addRow(_t("lbl_opt"), self.cb_optimize)
-        self.chk_parsimony = QCheckBox(_t("chk_pars"))
-        form_tree.addRow(self.chk_parsimony)
-        pv.addWidget(gb_search)
-        pv.addStretch(1)
-
-        scroll.setWidget(plates)
+        self.params = ParamsPanel(self.phys_cores)
+        self.params.changed.connect(self.trigger_autosave)
+        scroll.setWidget(self.params)
         v.addWidget(scroll, 1)
 
         # navigation (recent/presets/history) lives at the bottom of the column
-        self._build_nav_panel()
-        self.panel.setMaximumHeight(230)
-        v.addWidget(self.panel)
+        self.nav = NavPanel()
+        self.nav.setMaximumHeight(230)
+        self.nav.recent_activated.connect(self._open_recent)
+        self.nav.preset_activated.connect(self._preset_activated)
+        self.nav.preset_save_requested.connect(self._save_preset)
+        self.nav.preset_delete_requested.connect(self._delete_preset)
+        self.nav.history_activated.connect(self._open_history_entry)
+        v.addWidget(self.nav)
 
         control_row = QHBoxLayout()
         self.btn_run = QPushButton(_t("btn_run"))
         self.btn_run.setObjectName('btn_run')
-        self.btn_run.clicked.connect(self.start_pipeline)
+        self.btn_run.clicked.connect(lambda: self.start_pipeline())  # clicked(bool) must not leak into files_override
         self.btn_cancel = QPushButton(_t("btn_cancel"))
         self.btn_cancel.setObjectName('btn_cancel')
         self.btn_cancel.setEnabled(False)
@@ -351,94 +139,54 @@ class PhyMLApp(QWidget):
         return middle
 
     def _build_right_pane(self):
-        """Big tree viewer on top, Log/Stats/Summary tabs underneath."""
+        """Big tree viewer on top, Log/Stats/Summary/Queue tabs underneath."""
         right = QWidget()
         v = QVBoxLayout(right)
-        v.setContentsMargins(0, 0, 0, 0)
+        v.setContentsMargins(8, 0, 0, 0)  # breathing room from the left splitter
         self.tree_view = TreeViewerWidget()
-
-        self.result_tabs = QTabWidget()
-        self.log_console = LogConsole()
-        self.result_tabs.addTab(self.log_console, _t("tab_log"))
-
-        stats_tab = QWidget()
-        stats_lay = QVBoxLayout(stats_tab)
-        self.stats_file_label = QLabel("—")
-        self.stats_table = QTableWidget(0, 2)
-        self.stats_table.horizontalHeader().setVisible(False)
-        self.stats_table.verticalHeader().setVisible(False)
-        self.stats_table.setAlternatingRowColors(True)
-        self.stats_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.stats_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        stats_lay.addWidget(self.stats_file_label)
-        stats_lay.addWidget(self.stats_table)
-        self.result_tabs.addTab(stats_tab, _t("tab_stats"))
-
-        self.summary_table = QTableWidget(0, 8)
-        self.summary_table.verticalHeader().setVisible(False)
-        self.summary_table.setAlternatingRowColors(True)
-        self.summary_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for col in range(1, 8):
-            self.summary_table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeToContents)
-        self.result_tabs.addTab(self.summary_table, _t("tab_summary"))
-
-        split = QSplitter(Qt.Vertical)
-        split.addWidget(self.tree_view)
-        split.addWidget(self.result_tabs)
-        split.setSizes([470, 260])
-        split.setChildrenCollapsible(False)
-        self.right_split = split
-        v.addWidget(split, 1)
+        self.result_tabs = ResultsPanel()
+        self.result_tabs.retry_clicked.connect(self._retry_failed)
+        self.log_console = self.result_tabs.log_console
+        self.right_split = QSplitter(Qt.Vertical)
+        self.right_split.addWidget(self.tree_view)
+        self.right_split.addWidget(self.result_tabs)
+        self.right_split.setSizes([470, 260])
+        self.right_split.setChildrenCollapsible(False)
+        v.addWidget(self.right_split, 1)
         return right
 
-    def _build_status_bar(self):
-        self.status_bar = QStatusBar()
-        self.status_bar.setSizeGripEnabled(False)
-        self.cores_label = QLabel(_t("cores_info").format(self.phys_cores, self.logi_cores))
-        self.cpu_sys_label = QLabel(_t("cpu_sys").format(0))
-        self.cpu_sys_bar = QProgressBar()
-        self.cpu_sys_bar.setRange(0, 100)
-        self.cpu_sys_bar.setTextVisible(True)
-        self.cpu_sys_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.cpu_run_label = QLabel(_t("cpu_analysis_idle"))
-        self.settings_btn = QPushButton(_t("btn_settings"))
-        self.settings_btn.clicked.connect(self.open_settings)
-        self.status_bar.addWidget(self.cores_label)
-        self.status_bar.addWidget(self.cpu_sys_label)
-        self.status_bar.addWidget(self.cpu_sys_bar, 1)  # stretch: fills all free space
-        self.status_bar.addPermanentWidget(self.settings_btn)
-        self.status_bar.addPermanentWidget(self.cpu_run_label)
+    # ---------- input, drag & drop, recent ----------
 
-        self.cpu_timer = QTimer(self)
-        self.cpu_timer.setInterval(1000)
-        self.cpu_timer.timeout.connect(self.update_cpu_status)
-        if psutil is not None:
-            self.cpu_timer.start()
-        return self.status_bar
-
-    # ---------- drag & drop ----------
+    def _set_input(self, path):
+        self.fasta_path_input.setText(path)
+        self.fasta_file = path
 
     def dragEnterEvent(self, event):
         urls = event.mimeData().urls()
         if urls:
             p = urls[0].toLocalFile()
-            if os.path.isdir(p) or p.lower().endswith(('.fasta', '.fas', '.fa')):
+            if os.path.isdir(p) or p.lower().endswith(FASTA_SUFFIXES):
                 event.acceptProposedAction()
 
     def dropEvent(self, event):
-        p = event.mimeData().urls()[0].toLocalFile()
-        self.fasta_path_input.setText(p)
-        self.fasta_file = p
+        self._set_input(event.mimeData().urls()[0].toLocalFile())
         event.acceptProposedAction()
 
-    # ---------- panel / theme / settings helpers ----------
+    def _remember_recent(self, path):
+        self._recent = ([path] + [p for p in self._recent if p != path])[:10]
+        self.nav.set_recent(self._recent)
+
+    def _open_recent(self, path):
+        if os.path.exists(path):
+            self._set_input(path)
+
+    # ---------- theme, settings, models ----------
 
     def open_settings(self):
         SettingsDialog(self, self).exec()
 
     def apply_theme(self, theme_setting=None, accent_setting=None):
         """Resolve settings (with 'system' support), style the app and the log."""
-        from PySide6.QtWidgets import QApplication
         if theme_setting is not None:
             self._theme_setting = theme_setting
         if accent_setting is not None:
@@ -446,63 +194,30 @@ class PhyMLApp(QWidget):
         theme, accent = resolve(self._theme_setting, self._accent_setting)
         QApplication.instance().setStyleSheet(build_qss(theme, accent))
         self.log_console.set_role_colors(role_colors(theme, accent))
-
-    def _refresh_recent(self):
-        self.recent_list.clear()
-        for p in self._recent:
-            self.recent_list.addItem(os.path.basename(p) + ('/' if os.path.isdir(p) else ''))
-
-    def _remember_recent(self, path):
-        if path in self._recent:
-            self._recent.remove(path)
-        self._recent.insert(0, path)
-        self._recent = self._recent[:10]
-        self._refresh_recent()
-
-    def _open_recent(self, item):
-        row = self.recent_list.row(item)
-        if row < len(self._recent) and os.path.exists(self._recent[row]):
-            p = self._recent[row]
-            self.fasta_path_input.setText(p)
-            self.fasta_file = p
-
-    # ---------- pipeline plumbing ----------
-
-    def closeEvent(self, event):
-        if self.worker and self.worker.isRunning():
-            self.worker.cancel()
-            self.worker.wait()
-        self.auto_save()  # persist window geometry and splitter ratios
-        event.accept()
-
-    def toggle_bootstrap_input(self):
-        is_bootstrap = self.cb_support_method.currentData() == "bootstrap"
-        self.le_bootstrap_replicates.setEnabled(is_bootstrap)
-        if not self._is_loading: self.auto_save()
+        pal = PALETTES[theme]
+        self.tree_view.set_colors(pal['text'], accent, pal['base'])
 
     def update_models(self):
-        self.cb_model.clear()
-        dt = self.cb_datatype.currentData()
-        models = ["HKY85", "JC69", "K80", "F81", "F84", "TN93", "GTR", "custom"] if dt == "nt" else \
-                 ["LG", "WAG", "JTT", "MtREV", "Dayhoff", "DCMut", "RtREV", "CPREV", "VT", "Blosum62", "MtMam", "MtArt", "HIVw", "HIVb", "custom"]
-        for m in models: self.cb_model.addItem(m, m)
-        if not self._is_loading: self.auto_save()
+        # an unknown engine in a hand-edited config gets PhyML's list, as a run uses PhyML for it
+        self.params.set_engine(self.engines.get(self.engine_setting) or ENGINES['phyml'])
 
-    def browse_fasta(self):
-        path, _ = QFileDialog.getOpenFileName(self, _t("file_fasta"), "", "FASTA Files (*.fasta *.fas *.fa)")
-        if path:
-            self.fasta_path_input.setText(path)
-            self.fasta_file = path
+    set_combo_by_data = staticmethod(set_combo_by_data)
 
-    def browse_fasta_dir(self):
-        path = QFileDialog.getExistingDirectory(self, _t("file_dir"))
-        if path:
-            self.fasta_path_input.setText(path)
-            self.fasta_file = path
+    def on_phyml_path_changed(self, path):
+        if not is_mpi_binary(path):
+            self._mpi_auto_path = ""
+        elif not self.params.chk_use_mpi.isChecked() and self._mpi_auto_path != path:
+            self._mpi_auto_path = path
+            self.params.chk_use_mpi.setChecked(True)
+            if not self._is_loading:
+                self._log('system', _t("mpi_detected"))
+
+    # ---------- settings file ----------
 
     def bind_autosave(self, parent_widget):
         for child in parent_widget.children():
-            if isinstance(child, QLineEdit): child.textChanged.connect(self.trigger_autosave)
+            if child is self.params: continue   # it saves through params.changed
+            elif isinstance(child, QLineEdit): child.textChanged.connect(self.trigger_autosave)
             elif isinstance(child, QComboBox): child.currentIndexChanged.connect(self.trigger_autosave)
             elif isinstance(child, QCheckBox): child.toggled.connect(self.trigger_autosave)
             else: self.bind_autosave(child)
@@ -510,217 +225,238 @@ class PhyMLApp(QWidget):
     def trigger_autosave(self, *args):
         if not self._is_loading: self.auto_save()
 
+    def auto_save(self):
+        self.settings_store.save(self.get_current_config())
+
     def get_current_config(self):
         return {
+            "engine": self.engine_setting,
+            "iqtree_path": self.iqtree_path_input.text(),
             "phyml_path": self.phyml_path_input.text(),
             "mpirun_path": self.mpirun_path_input.text(),
             "muscle_path": self.muscle_path_input.text(),
-            "datatype": self.cb_datatype.currentData(),
-            "model": self.cb_model.currentData(),
-            "support_method": self.cb_support_method.currentData(),
-            "bootstrap_replicates": self.le_bootstrap_replicates.text(),
-            "use_mpi": self.chk_use_mpi.isChecked(),
-            "mpi_np": self.le_mpi_np.text(),
-            "freq": self.cb_freq.currentData(),
-            "tstv": self.le_tstv.text(),
-            "pinv": self.le_pinv.text(),
-            "classes": self.le_classes.text(),
-            "gamma": self.le_gamma.text(),
-            "search": self.cb_search.currentData(),
-            "optimize": self.cb_optimize.currentData(),
-            "parsimony": self.chk_parsimony.isChecked(),
+            **self.params.params(),
             "show_tree": self.chk_show_tree.isChecked(),
             "theme": self._theme_setting,
             "accent": self._accent_setting,
             "recent": self._recent,
-            "window": {
-                "w": self.width(), "h": self.height(),
-                "splitter": self.splitter.sizes(),
-                "vsplit": self.right_split.sizes(),
-            }
+            "presets": self._user_presets,
+            "window": {"w": self.width(), "h": self.height(),
+                       "splitter": self.splitter.sizes(), "vsplit": self.right_split.sizes()},
         }
-
-    def auto_save(self):
-        config = self.get_current_config()
-        try:
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=4, ensure_ascii=False)
-        except: pass
 
     def load_config(self):
         self.update_models()
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                self.phyml_path_input.setText(config.get("phyml_path", ""))
-                mpirun = config.get("mpirun_path", "mpiexec")
-                if mpirun in ("mpirun", "mpiexec"):
-                    mpirun = shutil.which("mpiexec") or shutil.which("mpirun") or mpirun
-                self.mpirun_path_input.setText(mpirun)
-                self.muscle_path_input.setText(config.get("muscle_path", ""))
-                self.set_combo_by_data(self.cb_datatype, config.get("datatype", "nt"))
-                self.update_models()
-                self.set_combo_by_data(self.cb_model, config.get("model", "HKY85"))
-                self.set_combo_by_data(self.cb_freq, config.get("freq", "default"))
-                self.set_combo_by_data(self.cb_support_method, config.get("support_method", "bootstrap"))
-                self.set_combo_by_data(self.cb_search, config.get("search", "NNI"))
-                self.set_combo_by_data(self.cb_optimize, config.get("optimize", "tlr"))
-                self.le_bootstrap_replicates.setText(config.get("bootstrap_replicates", "100"))
-                self.chk_use_mpi.setChecked(config.get("use_mpi", False))
-                self.le_mpi_np.setText(config.get("mpi_np", str(self.phys_cores)))
-                self.le_tstv.setText(config.get("tstv", "e"))
-                self.le_pinv.setText(config.get("pinv", "0.0"))
-                self.le_classes.setText(config.get("classes", "4"))
-                self.le_gamma.setText(config.get("gamma", "e"))
-                self.chk_parsimony.setChecked(config.get("parsimony", False))
-                self.chk_show_tree.setChecked(config.get("show_tree", True))
-                self._recent = [p for p in config.get("recent", []) if os.path.exists(p)]
-                self._refresh_recent()
-                self.apply_theme(config.get("theme", "system"),
-                                 config.get("accent", "green"))
-                win = config.get("window") or {}
-                if win.get("w") and win.get("h"):
-                    self.resize(min(win["w"], 4096), min(win["h"], 4096))
-                if isinstance(win.get("splitter"), list) and len(win["splitter"]) == 2:
-                    self.splitter.setSizes(win["splitter"])
-                if isinstance(win.get("vsplit"), list) and len(win["vsplit"]) == 2:
-                    self.right_split.setSizes(win["vsplit"])
-                self.toggle_bootstrap_input()
-                self.log_console.append(_t("sys_load"))
-            except Exception as e: self.log_console.append(_t("err_load").format(e))
+        raw, clean = self.settings_store.load()
+        try:
+            self._apply_config(settings.resolve_cores(settings.from_disk(raw, self.paths)))
+            if clean and os.path.isfile(self.paths.config_file):
+                self._log('system', _t("sys_load"))
+        except Exception as e:
+            self._log('error', _t("err_load").format(e))
+        # lists must be populated even without a config file
+        self._refresh_presets()
+        self._refresh_history()
 
-    def set_combo_by_data(self, combo, data_val):
-        idx = combo.findData(data_val)
-        if idx >= 0: combo.setCurrentIndex(idx)
+    def _apply_config(self, config):
+        """Show a settings dict (as returned by settings.from_disk) in the window."""
+        self.engine_setting = config["engine"]
+        self.iqtree_path_input.setText(config["iqtree_path"])
+        self.phyml_path_input.setText(config["phyml_path"])
+        mpirun = config["mpirun_path"]
+        if mpirun in ("mpirun", "mpiexec"):
+            mpirun = shutil.which("mpiexec") or shutil.which("mpirun") or mpirun
+        self.mpirun_path_input.setText(mpirun)
+        self.muscle_path_input.setText(config["muscle_path"])
+        self.update_models()
+        self.params.set_params(dict(presets.extract(config), use_mpi=config["use_mpi"],
+                                    mpi_np=config["mpi_np"]))
+        self.chk_show_tree.setChecked(config["show_tree"])
+        self._recent = [p for p in config["recent"] if isinstance(p, str) and os.path.exists(p)]
+        self.nav.set_recent(self._recent)
+        self._user_presets = dict(config["presets"])
+        self.apply_theme(config["theme"], config["accent"])
+        win = config["window"]
+        if win.get("w") and win.get("h"):
+            self.resize(min(win["w"], 4096), min(win["h"], 4096))
+        for key, split in (("splitter", self.splitter), ("vsplit", self.right_split)):
+            if isinstance(win.get(key), list) and len(win[key]) == 2:
+                split.setSizes(win[key])
 
-    def start_pipeline(self):
-        target = self.fasta_path_input.text() or self.fasta_file
-        if not target or not os.path.exists(target):
-            QMessageBox.warning(self, _t("err_box_title"), _t("err_box_msg")); return
-        if os.path.isdir(target):
-            # skip *_aligned.fasta: those are this app's own MUSCLE outputs
-            files = sorted(f for f in os.listdir(target)
-                           if f.lower().endswith(('.fasta', '.fas', '.fa'))
-                           and not f.lower().endswith('_aligned.fasta'))
+    # ---------- runs ----------
+
+    def _log(self, level, text):
+        """A log line at the given level; messages from the core modules may end with a newline."""
+        self.log_console.append(level, text.rstrip('\n'))
+
+    def start_pipeline(self, files_override=None):
+        if self.worker is not None and self.worker.isRunning():
+            return   # one run at a time: replacing a running worker would destroy its thread
+        if isinstance(files_override, bool):  # defensive: Qt clicked(checked)
+            files_override = None
+        if files_override is None:
+            target = self.fasta_path_input.text() or self.fasta_file
+            if not target or not os.path.exists(target):
+                QMessageBox.warning(self, _t("err_box_title"), _t("err_box_msg")); return
+            files = batch_files(target) if os.path.isdir(target) else [target]
             if not files:
                 QMessageBox.warning(self, _t("err_box_title"), _t("batch_empty")); return
-            files = [os.path.join(target, f) for f in files]
+            out_dir = target if os.path.isdir(target) else os.path.dirname(os.path.abspath(target))
+            inputs = [target]
         else:
-            files = [target]
-        if (is_mpi_binary(self.phyml_path_input.text())
-                and not self.chk_use_mpi.isChecked()
-                and self.cb_support_method.currentData() == "bootstrap"):
-            QMessageBox.warning(self, _t("mpi_boot_title"), _t("mpi_boot_msg")); return
-        self._batch_mode = len(files) > 1
+            files = list(files_override)
+            if not files:
+                return
+            target = os.path.dirname(files[0])
+            out_dir = os.path.dirname(os.path.abspath(files[0]))
+            inputs = list(files)
+        config = self.get_current_config()
+        if config.get('engine') not in self.engines:
+            config['engine'] = 'phyml'   # a hand-edited unknown engine: PhyML, as its model list
+        errors = [issue for issue in self.engines[config['engine']].validate(config, self.paths)
+                  if issue.level == 'error']
+        if errors:
+            QMessageBox.warning(self, _t('err_box_title'),
+                                '\n'.join(format_issue(issue) for issue in errors))
+            return
         self._remember_recent(target)
         if not self._is_loading: self.auto_save()
-        self.btn_run.setEnabled(False); self.btn_cancel.setEnabled(True); self.log_console.clear()
-        self.result_tabs.setCurrentWidget(self.log_console)
-        self._cpu_samples = []
-        self._mon_procs = {}
-        config = self.get_current_config()
-        self.worker = PipelineWorker(config, files)
-        self.worker.log_signal.connect(self.log_console.append)
-        self.worker.finished_signal.connect(self.pipeline_finished)
+        self.btn_run.setEnabled(False); self.btn_cancel.setEnabled(True)
+        self.result_tabs.begin_run(files)
+        self.status.track(self._active_pid)
+        self._run_started = datetime.now()
+        self._run_config, self._run_inputs, self._run_out_dir = config, inputs, out_dir
+        self.worker = RunWorker.for_run(config, files, self.paths, engines=self.engines)
+        self.worker.log.connect(self._log)
+        self.worker.status.connect(self.result_tabs.set_file_status)
+        self.worker.done.connect(self.pipeline_finished)
         self.worker.start()
+
+    def _active_pid(self):
+        """The root pid of the running analysis, for the CPU monitor."""
+        if self.worker is not None and self.worker.isRunning():
+            return self.worker.active_pid
+        return None
 
     def cancel_pipeline(self):
         if self.worker and self.worker.isRunning():
-            self.worker.cancel()
+            self.worker.cancel()   # returns at once; the kill runs on its own thread
             self.btn_cancel.setEnabled(False)
-            self.log_console.append(_t("sys_interrupt"))
+            self._log('error', _t("sys_interrupt"))
 
-    def pipeline_finished(self, success, tree_path):
+    def closeEvent(self, event):
+        if self.worker and self.worker.isRunning():
+            # synchronous: after close the process may exit and cut off a daemon thread,
+            # leaving phyml-mpi / smpd children alive
+            self.worker.cancel(block=True)
+            self.worker.wait()
+        self.auto_save()  # persist window geometry and splitter ratios
+        event.accept()
+
+    def pipeline_finished(self, result):
+        """Show a finished run (a RunResult): tables, summary files, history, retry, tree."""
+        if self.worker is not None:
+            self.worker.wait()   # done is emitted at the end of run(): this returns at once
+        self.last_result = result
         self.btn_run.setEnabled(True); self.btn_cancel.setEnabled(False)
-        avg = sum(self._cpu_samples) / len(self._cpu_samples) if self._cpu_samples else 0.0
-        self.cpu_run_label.setText(_t("cpu_analysis_done").format(int(avg), round(avg / 100, 1)))
-        if self.worker is not None and getattr(self.worker, 'results', None):
-            self._populate_stats()
-            self._populate_summary()
-            self._save_summary_csv()
-        if success and tree_path and os.path.exists(tree_path) and self.chk_show_tree.isChecked():
-            self.tree_view.load_tree(tree_path)
+        self.status.stop_tracking()
+        if result.files:
+            rows = report.summary_rows(result.files)
+            self.result_tabs.show_result(result, rows)
+            self._write_summary(rows)
+        self._append_history(result)
+        self._failed_files = [f.file for f in result.files if f.status == 'fail']
+        self.result_tabs.retry_btn.setVisible(bool(self._failed_files))
+        self._last_out_dir = self._run_out_dir
+        self.status.set_open_dir_enabled(self._last_out_dir is not None)
+        if result.success and self.chk_show_tree.isChecked():
+            tree = result.files[-1].tree
+            if tree and os.path.exists(tree):
+                self.tree_view.load_tree(tree)
 
-    def _populate_stats(self):
-        rows = [r for r in self.worker.results if r['status'] == 'OK']
-        if not rows:
-            return
-        r = rows[-1]
-        self.stats_file_label.setText(_t("stats_field_file") + ': ' + r['file'])
-        fields = [('stats_field_model', 'model'), ('stats_field_taxa', 'taxa'),
-                  ('stats_field_lnl', 'lnL'), ('stats_field_gamma', 'gamma'),
-                  ('stats_field_tstv', 'tstv'), ('stats_field_time', 'time')]
-        self.stats_table.setRowCount(len(fields))
-        for i, (key, col) in enumerate(fields):
-            self.stats_table.setItem(i, 0, QTableWidgetItem(_t(key)))
-            self.stats_table.setItem(i, 1, QTableWidgetItem(r.get(col) or 'n/a'))
-
-    def _populate_summary(self):
-        cols = ['file', 'status', 'model', 'taxa', 'lnL', 'gamma', 'tstv', 'time']
-        heads = [_t("sum_col_" + c) for c in cols]
-        self.summary_table.setColumnCount(len(cols))
-        self.summary_table.setHorizontalHeaderLabels(heads)
-        self.summary_table.setRowCount(len(self.worker.results))
-        for i, r in enumerate(self.worker.results):
-            for j, c in enumerate(cols):
-                self.summary_table.setItem(i, j, QTableWidgetItem(r.get(c) or ''))
-
-    def _save_summary_csv(self):
-        """Write per-file results (status, model, lnL, ...) to phymlgui_summary.csv."""
-        target = self.fasta_path_input.text() or self.fasta_file
-        out_dir = target if os.path.isdir(target) else os.path.dirname(os.path.abspath(target))
-        out_path = os.path.join(out_dir, 'phymlgui_summary.csv')
-        fields = ['file', 'status', 'model', 'taxa', 'lnL', 'gamma', 'tstv', 'time', 'tree']
+    def _write_summary(self, rows):
+        """phymlgui_summary.csv (and .xlsx) next to the inputs; a failure is only logged."""
         try:
-            with open(out_path, 'w', newline='', encoding='utf-8-sig') as f:
-                wr = csv.DictWriter(f, fieldnames=fields, delimiter=';', extrasaction='ignore')
-                wr.writeheader()
-                wr.writerows(self.worker.results)
-            self.log_console.append(_t("summary_saved").format(out_path))
-        except OSError as e:
-            self.log_console.append(_t("err_summary_save").format(e))
-
-    def on_phyml_path_changed(self, path):
-        if is_mpi_binary(path):
-            if not self.chk_use_mpi.isChecked() and self._mpi_auto_path != path:
-                self._mpi_auto_path = path
-                self.chk_use_mpi.setChecked(True)
-                if not self._is_loading:
-                    self.log_console.append(_t("mpi_detected"))
-        else:
-            self._mpi_auto_path = ""
-
-    def update_cpu_status(self):
-        if psutil is None:
+            written = report.write_summary(rows, self._run_out_dir)
+        except Exception as e:   # OSError, and whatever openpyxl raises after the CSV
+            self._log('error', _t("err_summary_save").format(e))
             return
-        sys_pct = psutil.cpu_percent(interval=None)
-        self.cpu_sys_bar.setValue(int(sys_pct))
-        self.cpu_sys_label.setText(_t("cpu_sys").format(int(sys_pct)))
-        proc = self.worker.active_process if self.worker is not None else None
-        if (self.worker is not None and self.worker.isRunning()
-                and proc is not None and proc.poll() is None):
-            try:
-                root = psutil.Process(proc.pid)
-                pids = {proc.pid} | {c.pid for c in root.children(recursive=True)}
-            except psutil.Error:
-                return
-            # cpu_percent() keeps per-call state inside each Process object,
-            # so objects must be reused across ticks to get non-zero values
-            for k in list(self._mon_procs):
-                if k not in pids:
-                    del self._mon_procs[k]
-            total = 0.0
-            for p in pids:
-                obj = self._mon_procs.get(p)
-                if obj is None:
-                    try:
-                        obj = self._mon_procs[p] = psutil.Process(p)
-                    except psutil.Error:
-                        continue
-                try:
-                    total += obj.cpu_percent(interval=None)
-                except psutil.Error:
-                    pass
-            self._cpu_samples.append(total)
-            self.cpu_run_label.setText(_t("cpu_analysis").format(int(total), round(total / 100, 1)))
+        for path in written:
+            key = 'xlsx_saved' if path.lower().endswith('.xlsx') else 'summary_saved'
+            self._log('success', _t(key).format(path))
+
+    def _retry_failed(self):
+        if self._failed_files:
+            self.start_pipeline(files_override=self._failed_files)
+
+    def _open_output_dir(self):
+        if self._last_out_dir and os.path.isdir(self._last_out_dir):
+            os.startfile(self._last_out_dir)
+
+    # ---------- history ----------
+
+    def _append_history(self, result):
+        """Add a finished run (a RunResult) to the history: one entry per file, with the
+        config the run was started with, not what the form shows now."""
+        config = self._run_config if isinstance(self._run_config, dict) else self.get_current_config()
+        params = {k: v for k, v in config.items() if k not in _NOT_RUN_PARAMS}
+        duration = (datetime.now() - self._run_started).total_seconds() if self._run_started else 0.0
+        rec = new_record(inputs=self._run_inputs,
+                         engine=params.get('engine') or self.engine_setting,
+                         params=params, files=[asdict(f) for f in result.files],
+                         duration_s=duration)
+        try:
+            self.history_store.append(rec)
+        except OSError as e:
+            self._log('error', _t('err_history_save').format(e))
+        self._refresh_history()
+
+    def _refresh_history(self):
+        try:
+            self._history_records = self.history_store.load(
+                on_error=lambda message: self._log('error', message))[:50]
+        except OSError as e:
+            self._history_records = []
+            self._log('error', _t('err_load').format(e))
+        self.nav.set_history(self._history_records)
+
+    def _open_history_entry(self, row):
+        if row >= len(self._history_records):
+            return
+        tree = best_tree(self._history_records[row])
+        if tree and os.path.exists(tree):
+            self.tree_view.load_tree(tree)
+        else:
+            self._log('error', _t('hist_no_tree'))
+
+    # ---------- presets ----------
+
+    def _refresh_presets(self):
+        self.nav.set_presets(presets.BUILTIN, self._user_presets)
+
+    def _preset_activated(self, preset):
+        params = presets.apply(preset, self.get_current_config())
+        self._is_loading = True   # one save for the whole preset, after it is shown
+        try:
+            self.engine_setting = params['engine']
+            self.update_models()
+            self.params.set_params(presets.extract(params))
+        finally:
+            self._is_loading = False
+        self.auto_save()
+        self._log('success', _t('preset_applied').format(self.nav.activated_preset_name))
+
+    def _save_preset(self):
+        name, ok = QInputDialog.getText(self, _t('preset_save_current'), _t('preset_prompt'))
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        self._user_presets[name] = presets.extract(self.get_current_config())
+        self.auto_save()
+        self._refresh_presets()
+        self._log('success', _t('preset_saved').format(name))
+
+    def _delete_preset(self, name):
+        self._user_presets.pop(name, None)
+        self.auto_save()
+        self._refresh_presets()

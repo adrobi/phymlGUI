@@ -1,0 +1,17 @@
+{
+  "iqtree": {
+    "version": "2.4.0",
+    "url": "https://github.com/iqtree/iqtree2/releases/download/v2.4.0/iqtree-2.4.0-Windows.zip",
+    "sha256": "93f488a6cfef96ef664b23fefe5be97c2c80ebcae9cd2031c0cac92b467278be",
+    "extract": {
+      "iqtree-2.4.0-Windows/bin/iqtree2.exe": "iqtree2.exe",
+      "iqtree-2.4.0-Windows/bin/libiomp5md.dll": "libiomp5md.dll"
+    }
+  },
+  "muscle": {
+    "version": "5.3",
+    "url": "https://github.com/rcedgar/muscle/releases/download/v5.3/muscle-win64.v5.3.exe",
+    "sha256": "a86637db99deb3efa1cb6762c4e3160ca33644608270eb167e4214f1f9409711",
+    "save_as": "muscle.exe"
+  }
+}

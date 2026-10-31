@@ -8,7 +8,9 @@ phymlgui v1.1/
 tools/
 testrun/
 ROADMAP.md
+phyml_history.json
 release_body.md
 release.json
 release_resp.json
 asset_resp.json
+/bin/

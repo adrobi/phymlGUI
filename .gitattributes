@@ -1,0 +1,2 @@
+# patches are applied to upstream LF sources: never convert their line endings
+*.patch text eol=lf

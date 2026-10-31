@@ -19,6 +19,10 @@ def load_translations():
     """ Load localization strings from external JSON file """
     locales_path = resource_path('locales.json')
     if not os.path.exists(locales_path):
+        # fallback: next to the package root (CLI runs from any cwd)
+        locales_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'locales.json')
+    if not os.path.exists(locales_path):
         print(f"Warning: {locales_path} not found. Fallback to empty dictionary.")
         return {"en": {}, "ru": {}}
 
