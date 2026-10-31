@@ -307,7 +307,9 @@ def test_undecodable_engine_output_is_replaced(tmp_path, paths):
     assert any(text.startswith('progress ') for text in rec.texts('out'))
 
 
-def test_run_in_cyrillic_dir_with_spaces(tmp_path, paths):
+def test_run_in_cyrillic_dir_with_spaces(tmp_path, paths, monkeypatch):
+    # an English Windows (CI) pipes child output as cp1252, which has no Cyrillic
+    monkeypatch.setenv('PYTHONIOENCODING', 'cp1252')
     folder = tmp_path / 'Мои данные' / 'проект 1'
     aligned = write_fasta(folder / 'выборка 1.fasta', ALIGNED)
     unaligned = write_fasta(folder / 'выборка 2.fasta', UNALIGNED)
