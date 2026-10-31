@@ -6,7 +6,6 @@ name: release
 on:
   push:
     tags: ['v*']
-    branches: [release]   # TEMPORARY: trial run before release.yml is on master; remove before merge
   workflow_dispatch:
 
 permissions:
@@ -253,6 +252,9 @@ jobs:
           python3 packaging/release_meta.py notes "$VERSION" notes.md
       - name: Create or update the draft release
         run: |
+          # vX.Y.Z-suffix (rc, beta) is a pre-release
+          prerelease=()
+          case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
           files=(out/phymlGUI-*-windows-x64.zip out/phymlGUI-*-x86_64.AppImage
                  out/raxml-ng-2.0.3-source+patch.tar.gz out/SHA256SUMS)
           if draft=$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null); then
@@ -261,7 +263,8 @@ jobs:
               exit 1
             fi
             gh release upload "$TAG" "${files[@]}" --clobber
+            if [ ${#prerelease[@]} -gt 0 ]; then gh release edit "$TAG" "${prerelease[@]}"; fi
           else
-            gh release create "$TAG" --draft --verify-tag --title "phymlGUI $VERSION" \
+            gh release create "$TAG" --draft "${prerelease[@]}" --verify-tag --title "phymlGUI $VERSION" \
               --notes-file notes.md "${files[@]}"
           fi
